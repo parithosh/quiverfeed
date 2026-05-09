@@ -74,6 +74,18 @@ _DATASETS: dict[str, Dataset] = {
             "as event_time; no separate disclosure date is advertised."
         ),
     ),
+    "politicians": Dataset(
+        name="politicians",
+        path="/beta/bulk/congress/politicians",
+        plan="hobbyist",
+        event_col=None,
+        disclosure_col=None,
+        notes=(
+            "Roster of congressional traders, sortable by activity. Reference "
+            "data, not an event stream — no event_time / available_at columns "
+            "are added."
+        ),
+    ),
 }
 
 DATASETS: Mapping[str, Dataset] = MappingProxyType(_DATASETS)

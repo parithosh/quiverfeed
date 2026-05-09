@@ -89,6 +89,7 @@ def test_diagnose_defaults_to_full_catalog(tmp_path):
         FakeResponse({"data": [{"Date": "2024-01-03", "fileDate": "2024-01-10"}]}),
         FakeResponse({"data": [{"Date": "2024-01-03"}]}),
         FakeResponse({"data": [{"lastActionDate": "2024-01-03"}]}),
+        FakeResponse({"data": [{"Name": "Example Member"}]}),
     ]
     c = make_client(tmp_path, responses)
     with warnings.catch_warnings():
