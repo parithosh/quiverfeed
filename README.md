@@ -82,6 +82,16 @@ late = known[known["available_at"] > known["event_time"]]
 For datasets that do not advertise a separate disclosure date, `quiverfeed`
 adds `event_time` only. It does not fabricate `available_at`.
 
+`validate_pit(df, dataset="...")` is the catalog-aware companion to
+`assert_disclosure_dated`. It raises a clear error when the named dataset has
+no disclosure column at all (rather than the generic "missing available_at"),
+and it asserts the consistency invariant `available_at >= event_time`:
+
+```python
+quiverfeed.validate_pit(df, dataset="congresstrading")
+quiverfeed.validate_pit(df, dataset="lobbying")  # raises: not PIT-capable
+```
+
 ### Timezones
 
 By default, canonical date columns are tz-aware UTC. Projects that pin to a

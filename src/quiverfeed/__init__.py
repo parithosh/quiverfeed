@@ -23,7 +23,7 @@ from .errors import (
     TruncatedResultWarning,
     UnknownDatasetError,
 )
-from .validation import assert_disclosure_dated
+from .validation import assert_disclosure_dated, validate_pit
 
 __all__ = [
     "AuthError",
@@ -45,6 +45,7 @@ __all__ = [
     "all_datasets",
     "assert_disclosure_dated",
     "diagnose",
+    "validate_pit",
     "register_dataset",
     "unregister_dataset",
     "__version__",
