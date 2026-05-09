@@ -32,10 +32,11 @@ _DATASETS: dict[str, Dataset] = {
         event_col="Traded",
         disclosure_col="Filed",
         ignored_params=("date_from", "date_to"),
-        default_params=(("version", "V2"),),
         notes=(
             "Congressional stock trades. Use available_at/Filed for "
-            "point-in-time analysis; Traded is the event date."
+            "point-in-time analysis; Traded is the event date. Pass "
+            "version='V2' explicitly to opt into the V2 schema; default "
+            "sends no version, matching the published API examples."
         ),
     ),
     "insiders": Dataset(

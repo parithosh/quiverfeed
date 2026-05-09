@@ -79,7 +79,7 @@ def test_fetch_adds_canonical_dates_and_uses_cache(tmp_path):
     assert "available_at" in df.columns
     assert df.loc[0, "event_time"].isoformat() == "2024-01-03T00:00:00+00:00"
     assert df.loc[0, "available_at"].isoformat() == "2024-01-10T00:00:00+00:00"
-    assert c._session.calls[0]["params"]["version"] == "V2"
+    assert "version" not in c._session.calls[0]["params"]
     assert c._session.calls[0]["params"]["page"] == 1
     assert c._session.calls[0]["params"]["page_size"] == 10
 

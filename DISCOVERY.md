@@ -46,3 +46,13 @@ limits or repeated live tests prove a better default.
 `date_from` and `date_to` have been observed as ignored on the
 `congresstrading` bulk endpoint. `quiverfeed` warns when callers pass them but
 still sends them through.
+
+## Schema Versions
+
+`congresstrading` accepts an optional `version=V2` parameter for an alternate
+response schema. The published API examples and a working prototype against
+the live API send no version and receive the column shape encoded in this
+catalog (`Traded`, `Filed`, `Ticker`, `TickerType`, `Chamber`, ...).
+`quiverfeed` therefore treats `version` as caller-supplied: pass
+`version="V2"` explicitly to opt in. Promote it to a default only when live
+diagnostics confirm V2 has become the upstream default.

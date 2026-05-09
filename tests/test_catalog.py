@@ -43,11 +43,18 @@ def test_get_dataset_unknown_returns_none():
 
 
 def test_dataset_defaults_returns_fresh_dict():
-    dataset = DATASETS["congresstrading"]
+    dataset = Dataset(
+        name="x",
+        path="/x",
+        plan=None,
+        event_col=None,
+        disclosure_col=None,
+        default_params=(("k", "v"),),
+    )
     first = dataset.defaults()
-    assert first == {"version": "V2"}
-    first["version"] = "MUTATED"
-    assert dataset.defaults() == {"version": "V2"}
+    assert first == {"k": "v"}
+    first["k"] = "MUTATED"
+    assert dataset.defaults() == {"k": "v"}
 
 
 def test_known_datasets_have_required_attributes():
