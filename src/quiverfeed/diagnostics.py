@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Iterable
 
-from .catalog import DATASETS, get_dataset
+from .catalog import all_datasets, get_dataset
 from .client import Client
 from .errors import CatalogDriftError, QuiverFeedError
 
@@ -46,7 +46,7 @@ def diagnose(
     page_size: int = 1,
 ) -> DiagnoseReport:
     active_client = client or Client(token=token)
-    names = tuple(datasets) if datasets is not None else tuple(DATASETS.keys())
+    names = tuple(datasets) if datasets is not None else tuple(all_datasets().keys())
     results: list[DatasetDiagnostic] = []
 
     for name in names:

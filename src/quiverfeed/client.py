@@ -14,7 +14,7 @@ import requests
 
 from ._version import __version__
 from .cache import CacheStore
-from .catalog import DATASETS, Dataset, get_dataset
+from .catalog import Dataset, all_datasets, get_dataset
 from .errors import (
     AuthError,
     CatalogDriftError,
@@ -91,7 +91,7 @@ class Client:
 
         dataset_meta = get_dataset(dataset)
         if dataset_meta is None:
-            raise UnknownDatasetError(dataset, list(DATASETS.keys()))
+            raise UnknownDatasetError(dataset, list(all_datasets().keys()))
 
         self._warn_ignored_params(dataset_meta, params)
         cache_params = self._cache_params(dataset_meta, params)

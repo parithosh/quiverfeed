@@ -78,19 +78,44 @@ _DATASETS: dict[str, Dataset] = {
 
 DATASETS: Mapping[str, Dataset] = MappingProxyType(_DATASETS)
 
+# User-registered datasets via register_dataset(); they override built-ins on
+# name collision so callers can patch a built-in entry whose schema has
+# drifted upstream without forking the package.
+_USER_DATASETS: dict[str, Dataset] = {}
+
 
 def normalize_dataset_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
+def all_datasets() -> dict[str, Dataset]:
+    merged = dict(_DATASETS)
+    merged.update(_USER_DATASETS)
+    return merged
+
+
+def register_dataset(dataset: Dataset, *, replace: bool = False) -> None:
+    if not replace and dataset.name in _USER_DATASETS:
+        raise ValueError(
+            f"Dataset {dataset.name!r} already registered; pass replace=True "
+            "to overwrite."
+        )
+    _USER_DATASETS[dataset.name] = dataset
+
+
+def unregister_dataset(name: str) -> None:
+    _USER_DATASETS.pop(name, None)
+
+
 def get_dataset(name: str) -> Dataset | None:
-    if name in DATASETS:
-        return DATASETS[name]
+    catalog = all_datasets()
+    if name in catalog:
+        return catalog[name]
 
     normalized = normalize_dataset_name(name)
     matches = [
         dataset
-        for key, dataset in DATASETS.items()
+        for key, dataset in catalog.items()
         if normalize_dataset_name(key) == normalized
     ]
     if len(matches) == 1:

@@ -109,6 +109,30 @@ client.fetch("congress_trading")  # resolves to "congresstrading"
 
 Truly unknown datasets raise `UnknownDatasetError`.
 
+### Custom datasets
+
+Register a `Dataset` to reach an endpoint not in the built-in catalog or to
+override a built-in whose schema has drifted:
+
+```python
+import quiverfeed
+
+quiverfeed.register_dataset(
+    quiverfeed.Dataset(
+        name="my_signal",
+        path="/beta/bulk/my_signal",
+        plan="premium",
+        event_col="event_date",
+        disclosure_col="disclosed_at",
+    )
+)
+
+df = quiverfeed.Client().fetch("my_signal")
+```
+
+`register_dataset(..., replace=True)` overwrites; `unregister_dataset(name)`
+removes a registration.
+
 ## Caching
 
 Successful complete fetches are cached as Parquet under

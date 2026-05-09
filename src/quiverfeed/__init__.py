@@ -1,7 +1,13 @@
 """Point-in-time-safe Python client for Quiver Quantitative data."""
 
 from ._version import __version__
-from .catalog import DATASETS, Dataset
+from .catalog import (
+    DATASETS,
+    Dataset,
+    all_datasets,
+    register_dataset,
+    unregister_dataset,
+)
 from .client import Client
 from .diagnostics import DiagnoseReport, DatasetDiagnostic, diagnose
 from .errors import (
@@ -36,7 +42,10 @@ __all__ = [
     "TruncatedResultError",
     "TruncatedResultWarning",
     "UnknownDatasetError",
+    "all_datasets",
     "assert_disclosure_dated",
     "diagnose",
+    "register_dataset",
+    "unregister_dataset",
     "__version__",
 ]
