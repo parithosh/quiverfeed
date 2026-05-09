@@ -241,6 +241,28 @@ logical page request.
 client = quiverfeed.Client(max_retries=2, retry_backoff_s=0.5)
 ```
 
+## Command-line interface
+
+```bash
+quiverfeed --help
+quiverfeed datasets                                   # list the catalog
+quiverfeed datasets --json
+quiverfeed fetch congresstrading --max-pages 5 --out trades.parquet
+quiverfeed fetch insiders --param chamber=senate --format json
+quiverfeed diagnose                                   # cached health check
+quiverfeed diagnose --force --json
+quiverfeed cache --path
+quiverfeed cache --clear --yes
+```
+
+The token is read from `QUIVER_TOKEN` (or `--token`). Output format is
+inferred from `--out` extension (`.parquet` / `.csv` / `.json`); `--format`
+overrides. With no `--out`, results print to stdout — table by default,
+machine-readable with `--format json` / `csv`.
+
+`python -m quiverfeed ...` works as an alternative if the script entry isn't
+on `PATH`.
+
 ## Catalog Diagnostics
 
 Run a live check against Quiver to see whether the local catalog still matches

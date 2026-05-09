@@ -117,6 +117,11 @@ Says `>=3.11`. Tradoor pins `>=3.14,<3.15`. Probably fine, but worth noting if
 - Async client — defer until a real user asks; sync is the right shape for a
   20/hr bucket.
 
+## Done in this branch beyond the original list
+
+- CLI: `quiverfeed fetch / diagnose / datasets / cache` with parquet / csv /
+  json / table output. Console script entry registered in `pyproject.toml`.
+
 ## Decided not to do
 
 - #6 incremental cache — see above. Whole-blob TTL is correct-by-default.
