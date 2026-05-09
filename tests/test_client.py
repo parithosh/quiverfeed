@@ -128,6 +128,46 @@ def test_max_pages_full_final_page_warns_by_default(tmp_path):
     assert len(partial) == 1
 
 
+def test_request_pause_fires_between_pages_only(tmp_path):
+    sleeps: list[float] = []
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=FakeSession(
+            [
+                FakeResponse({"data": [congress_row()]}),
+                FakeResponse({"data": [congress_row()]}),
+                FakeResponse({"data": []}),
+            ]
+        ),
+        rate_limit_policy="off",
+        request_pause_s=0.25,
+        sleep=sleeps.append,
+    )
+    c.fetch("congresstrading", page_size=1)
+    # Three HTTP calls, two inter-page gaps.
+    assert sleeps == [0.25, 0.25]
+
+
+def test_request_pause_zero_disables_sleeping(tmp_path):
+    sleeps: list[float] = []
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=FakeSession(
+            [
+                FakeResponse({"data": [congress_row()]}),
+                FakeResponse({"data": []}),
+            ]
+        ),
+        rate_limit_policy="off",
+        request_pause_s=0.0,
+        sleep=sleeps.append,
+    )
+    c.fetch("congresstrading", page_size=1)
+    assert sleeps == []
+
+
 def test_on_truncated_warn_returns_partial_and_does_not_cache(tmp_path):
     c = client(
         tmp_path,

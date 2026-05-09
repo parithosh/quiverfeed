@@ -6,7 +6,7 @@ import time
 import warnings
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping
 from urllib.parse import urljoin
 
 import pandas as pd
@@ -46,15 +46,21 @@ class Client:
         bucket_file: Path | str | None = None,
         timeout: tuple[float, float] = (5, 30),
         strict_catalog: bool = True,
+        request_pause_s: float = 1.0,
         *,
         session: requests.Session | None = None,
         base_url: str = DEFAULT_BASE_URL,
+        sleep: Callable[[float], None] = time.sleep,
     ):
+        if request_pause_s < 0:
+            raise ValueError("request_pause_s must be >= 0")
         self.token = token if token is not None else os.getenv("QUIVER_TOKEN")
         self.cache_ttl = cache_ttl
         self.timeout = timeout
         self.strict_catalog = strict_catalog
+        self.request_pause_s = request_pause_s
         self.base_url = base_url
+        self._sleep = sleep
         self._session = session or requests.Session()
         self._cache = CacheStore(cache_dir)
         self._bucket = TokenBucket(
@@ -111,6 +117,11 @@ class Client:
                 truncated = True
                 break
             page += 1
+            # Pace inter-page requests. The hourly bucket protects against
+            # daily-budget burn, but Quiver also appears to apply a
+            # per-second/burst rule that the bucket doesn't catch.
+            if self.request_pause_s > 0:
+                self._sleep(self.request_pause_s)
 
         df = self._to_dataframe(dataset_meta, rows)
         if truncated:

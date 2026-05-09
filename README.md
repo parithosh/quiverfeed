@@ -142,10 +142,16 @@ client = quiverfeed.Client(bucket_file="~/.cache/quiverfeed/bucket.json")
 
 ## Pagination
 
-By default, `fetch()` paginates until it receives a short page.
+By default, `fetch()` paginates until it receives a short page. Between pages
+the client sleeps `request_pause_s` seconds (default 1.0) to stay under
+Quiver's per-second/burst behavior, which the hourly token bucket does not
+catch:
 
 ```python
 df = client.fetch("congresstrading", page_size=5000)
+
+# Tighter pacing for offline backfills against your own quota:
+client = quiverfeed.Client(request_pause_s=2.0)
 ```
 
 If you cap pages and the final page is full, the result may be incomplete.
