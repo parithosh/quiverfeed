@@ -242,5 +242,13 @@ report = quiverfeed.diagnose()
 print(report.to_text())
 ```
 
+Reports are cached for one hour by default to avoid burning rate-limit
+tokens on repeated health checks. Pass `force=True` to bypass the cache or
+shorten `cache_ttl` if you want fresher results:
+
+```python
+report = quiverfeed.diagnose(force=True)
+```
+
 This performs real API calls and consumes rate-limit budget.
 

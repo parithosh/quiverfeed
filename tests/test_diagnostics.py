@@ -81,6 +81,36 @@ def test_diagnose_text_includes_generated_at_iso(tmp_path):
     assert report.generated_at.isoformat() in text
 
 
+def test_diagnose_caches_report_within_ttl(tmp_path):
+    c = make_client(
+        tmp_path,
+        [FakeResponse({"data": [{"Traded": "2024-01-03", "Filed": "2024-01-10"}]})],
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", TruncatedResultWarning)
+        first = quiverfeed.diagnose(client=c, datasets=["congresstrading"])
+        # Second call: no further fake responses available — must hit cache.
+        second = quiverfeed.diagnose(client=c, datasets=["congresstrading"])
+
+    assert first.ok and second.ok
+    assert first.generated_at == second.generated_at
+
+
+def test_diagnose_force_bypasses_cache(tmp_path):
+    c = make_client(
+        tmp_path,
+        [
+            FakeResponse({"data": [{"Traded": "2024-01-03", "Filed": "2024-01-10"}]}),
+            FakeResponse({"data": [{"Traded": "2024-01-03", "Filed": "2024-01-10"}]}),
+        ],
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", TruncatedResultWarning)
+        quiverfeed.diagnose(client=c, datasets=["congresstrading"])
+        quiverfeed.diagnose(client=c, datasets=["congresstrading"], force=True)
+    assert c._session.calls and len(c._session.calls) == 2
+
+
 def test_diagnose_defaults_to_full_catalog(tmp_path):
     # One response per dataset in the catalog. The fake responses each shape
     # match each dataset's expected event/disclosure cols.

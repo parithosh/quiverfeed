@@ -43,6 +43,15 @@ def test_state_tracks_remaining_in_memory():
     assert state.limit_per_hour == 3
     assert state.used == 1
     assert state.remaining == 2
+    # reset_at populated as soon as any slot is in use; this is when the
+    # oldest slot rolls off the rolling 1h window.
+    assert state.reset_at is not None
+
+
+def test_state_reset_at_none_when_unused():
+    bucket = TokenBucket(limit_per_hour=3, policy="raise")
+    state = bucket.state()
+    assert state.used == 0
     assert state.reset_at is None
 
 

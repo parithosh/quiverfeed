@@ -66,9 +66,11 @@ class TokenBucket:
         used = len(timestamps)
         remaining = max(self.limit_per_hour - used, 0)
         retry_after = self._retry_after(timestamps, time.time())
+        # When at least one slot has been used, expose when the oldest one
+        # rolls off — useful for UI even if the bucket isn't yet exhausted.
         reset_at = (
             datetime.fromtimestamp(timestamps[0], UTC) + timedelta(hours=1)
-            if timestamps and remaining == 0
+            if timestamps
             else None
         )
         return RateLimitState(
