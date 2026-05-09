@@ -14,7 +14,7 @@ import requests
 
 from ._version import __version__
 from .cache import CacheStore
-from .catalog import DATASETS, Dataset, get_dataset
+from .catalog import Dataset, all_datasets, get_dataset
 from .errors import (
     AuthError,
     CatalogDriftError,
@@ -33,6 +33,7 @@ OnTruncated = Literal["raise", "warn", "ignore"]
 
 LOGGER = logging.getLogger("quiverfeed")
 DEFAULT_BASE_URL = "https://api.quiverquant.com"
+RETRY_BACKOFF_S = 0.5  # base for exponential retry; tune via subclass if needed
 
 
 class Client:
@@ -46,6 +47,9 @@ class Client:
         bucket_file: Path | str | None = None,
         timeout: tuple[float, float] = (5, 30),
         strict_catalog: bool = True,
+        request_pause_s: float = 1.0,
+        tz: str | None = "UTC",
+        max_retries: int = 2,
         *,
         session: requests.Session | None = None,
         base_url: str = DEFAULT_BASE_URL,
@@ -54,6 +58,9 @@ class Client:
         self.cache_ttl = cache_ttl
         self.timeout = timeout
         self.strict_catalog = strict_catalog
+        self.request_pause_s = request_pause_s
+        self.tz = tz
+        self.max_retries = max_retries
         self.base_url = base_url
         self._session = session or requests.Session()
         self._cache = CacheStore(cache_dir)
@@ -68,7 +75,7 @@ class Client:
         dataset: str,
         page_size: int = 5000,
         max_pages: int | None = None,
-        on_truncated: OnTruncated = "raise",
+        on_truncated: OnTruncated = "warn",
         force: bool = False,
         **params: Any,
     ) -> pd.DataFrame:
@@ -83,7 +90,7 @@ class Client:
 
         dataset_meta = get_dataset(dataset)
         if dataset_meta is None:
-            raise UnknownDatasetError(dataset, list(DATASETS.keys()))
+            raise UnknownDatasetError(dataset, list(all_datasets().keys()))
 
         self._warn_ignored_params(dataset_meta, params)
         cache_params = self._cache_params(dataset_meta, params)
@@ -111,6 +118,11 @@ class Client:
                 truncated = True
                 break
             page += 1
+            # Pace inter-page requests. The hourly bucket protects against
+            # daily-budget burn, but Quiver also appears to apply a
+            # per-second/burst rule that the bucket doesn't catch.
+            if self.request_pause_s > 0:
+                time.sleep(self.request_pause_s)
 
         df = self._to_dataframe(dataset_meta, rows)
         if truncated:
@@ -148,41 +160,50 @@ class Client:
         }
         url = urljoin(self.base_url.rstrip("/") + "/", dataset.path.lstrip("/"))
 
+        # One bucket charge per logical page request — retries do not consume
+        # extra tokens since the upstream never serviced the original.
         self._bucket.acquire()
-        started = time.perf_counter()
-        response = self._session.get(
-            url,
-            headers=headers,
-            params=params,
-            timeout=self.timeout,
-        )
-        latency = time.perf_counter() - started
-        status_code = getattr(response, "status_code", None)
-        LOGGER.debug(
-            "GET %s status=%s latency=%.3fs page=%s",
-            dataset.path,
-            status_code,
-            latency,
-            page,
-        )
 
-        if status_code == 401:
-            raise AuthError("Quiver returned 401 Unauthorized.")
-        if status_code == 403:
-            raise PlanRequiredError(dataset.name, _response_text(response), dataset.plan)
-        if status_code == 429:
-            retry_after = _retry_after(response)
-            raise RateLimitError(retry_after)
-        if status_code is not None and status_code >= 400:
-            response.raise_for_status()
+        attempt = 0
+        while True:
+            try:
+                response = self._session.get(url, headers=headers, params=params, timeout=self.timeout)
+            except (requests.ConnectionError, requests.Timeout):
+                if attempt >= self.max_retries:
+                    raise
+                time.sleep(RETRY_BACKOFF_S * (2**attempt))
+                attempt += 1
+                continue
 
-        payload = response.json()
-        if isinstance(payload, list):
-            return _ensure_rows(dataset.name, payload)
-        if isinstance(payload, dict) and isinstance(payload.get("data"), list):
-            return _ensure_rows(dataset.name, payload["data"])
+            status_code = getattr(response, "status_code", None)
+            LOGGER.debug(
+                "GET %s status=%s page=%s attempt=%d",
+                dataset.path, status_code, page, attempt,
+            )
 
-        raise ResponseShapeError(dataset.name, type(payload).__name__)
+            if status_code is not None and 500 <= status_code < 600:
+                if attempt >= self.max_retries:
+                    response.raise_for_status()
+                time.sleep(RETRY_BACKOFF_S * (2**attempt))
+                attempt += 1
+                continue
+
+            if status_code == 401:
+                raise AuthError("Quiver returned 401 Unauthorized.")
+            if status_code == 403:
+                raise PlanRequiredError(dataset.name, _response_text(response), dataset.plan)
+            if status_code == 429:
+                raise RateLimitError(_retry_after(response))
+            if status_code is not None and status_code >= 400:
+                response.raise_for_status()
+
+            payload = response.json()
+            if isinstance(payload, list):
+                return _ensure_rows(dataset.name, payload)
+            if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+                return _ensure_rows(dataset.name, payload["data"])
+
+            raise ResponseShapeError(dataset.name, type(payload).__name__)
 
     def _to_dataframe(
         self,
@@ -190,7 +211,7 @@ class Client:
         rows: list[Mapping[str, Any]],
     ) -> pd.DataFrame:
         df = pd.DataFrame(rows)
-        if df.empty and len(df.columns) == 0:
+        if df.empty:
             return df
 
         if dataset.event_col is not None:
@@ -223,7 +244,16 @@ class Client:
                 stacklevel=2,
             )
             return
-        df[target_col] = pd.to_datetime(df[source_col], utc=True)
+        # Parse to UTC consistently, then project to caller-requested tz.
+        # tz=None ⇒ naive output (lossy for tz-aware sources, intentional
+        # for projects pinned to a single zone). tz="UTC" ⇒ unchanged.
+        parsed = pd.to_datetime(df[source_col], utc=True)
+        if self.tz is None:
+            df[target_col] = parsed.dt.tz_localize(None)
+        elif self.tz == "UTC":
+            df[target_col] = parsed
+        else:
+            df[target_col] = parsed.dt.tz_convert(self.tz)
 
     @staticmethod
     def _warn_ignored_params(dataset: Dataset, params: Mapping[str, Any]) -> None:

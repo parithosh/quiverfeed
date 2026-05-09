@@ -79,7 +79,7 @@ def test_fetch_adds_canonical_dates_and_uses_cache(tmp_path):
     assert "available_at" in df.columns
     assert df.loc[0, "event_time"].isoformat() == "2024-01-03T00:00:00+00:00"
     assert df.loc[0, "available_at"].isoformat() == "2024-01-10T00:00:00+00:00"
-    assert c._session.calls[0]["params"]["version"] == "V2"
+    assert "version" not in c._session.calls[0]["params"]
     assert c._session.calls[0]["params"]["page"] == 1
     assert c._session.calls[0]["params"]["page_size"] == 10
 
@@ -112,11 +112,191 @@ def test_page_and_page_size_params_are_reserved(tmp_path):
         c.fetch("congresstrading", page=2)
 
 
-def test_max_pages_full_final_page_raises(tmp_path):
+def test_max_pages_full_final_page_raises_when_requested(tmp_path):
     c = client(tmp_path, [FakeResponse({"data": [congress_row()]})])
 
     with pytest.raises(TruncatedResultError):
-        c.fetch("congresstrading", page_size=1, max_pages=1)
+        c.fetch("congresstrading", page_size=1, max_pages=1, on_truncated="raise")
+
+
+def test_max_pages_full_final_page_warns_by_default(tmp_path):
+    c = client(tmp_path, [FakeResponse({"data": [congress_row()]})])
+
+    with pytest.warns(TruncatedResultWarning):
+        partial = c.fetch("congresstrading", page_size=1, max_pages=1)
+
+    assert len(partial) == 1
+
+
+def test_request_pause_fires_between_pages_only(tmp_path, monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda s: sleeps.append(s))
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=FakeSession(
+            [
+                FakeResponse({"data": [congress_row()]}),
+                FakeResponse({"data": [congress_row()]}),
+                FakeResponse({"data": []}),
+            ]
+        ),
+        rate_limit_policy="off",
+        request_pause_s=0.25,
+    )
+    c.fetch("congresstrading", page_size=1)
+    # Three HTTP calls, two inter-page gaps.
+    assert sleeps == [0.25, 0.25]
+
+
+def test_tz_none_returns_naive_timestamps(tmp_path):
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=FakeSession([FakeResponse({"data": [congress_row()]})]),
+        rate_limit_policy="off",
+        tz=None,
+    )
+    df = c.fetch("congresstrading", page_size=10)
+    assert df["event_time"].dt.tz is None
+    assert df["available_at"].dt.tz is None
+    assert df.loc[0, "event_time"].isoformat() == "2024-01-03T00:00:00"
+    assert df.loc[0, "available_at"].isoformat() == "2024-01-10T00:00:00"
+
+
+def test_tz_named_zone_converts(tmp_path):
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=FakeSession([FakeResponse({"data": [congress_row()]})]),
+        rate_limit_policy="off",
+        tz="America/New_York",
+    )
+    df = c.fetch("congresstrading", page_size=10)
+    assert str(df["available_at"].dt.tz) == "America/New_York"
+
+
+class FlakySession:
+    """Session that emits a sequence of responses or callables-that-raise."""
+
+    def __init__(self, sequence):
+        self.sequence = list(sequence)
+        self.calls = 0
+
+    def get(self, url, headers, params, timeout):
+        self.calls += 1
+        if not self.sequence:
+            raise AssertionError("No fake responses left")
+        item = self.sequence.pop(0)
+        if callable(item):
+            return item()
+        return item
+
+
+def _raise_connection_error():
+    raise requests.ConnectionError("boom")
+
+
+def test_retries_on_connection_error_then_succeeds(tmp_path, monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda s: sleeps.append(s))
+    session = FlakySession([_raise_connection_error, FakeResponse({"data": []})])
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        request_pause_s=0.0,
+        max_retries=2,
+    )
+    df = c.fetch("congresstrading", page_size=10)
+    assert df.empty
+    assert session.calls == 2
+    assert sleeps == [0.5]  # base backoff (RETRY_BACKOFF_S) between attempts 0 and 1
+
+
+def test_retries_on_5xx_then_succeeds(tmp_path, monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda s: sleeps.append(s))
+    session = FlakySession(
+        [FakeResponse({}, status_code=503), FakeResponse({"data": []})]
+    )
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        request_pause_s=0.0,
+        max_retries=2,
+    )
+    df = c.fetch("congresstrading", page_size=10)
+    assert df.empty
+    assert session.calls == 2
+    assert sleeps == [0.5]
+
+
+def test_retries_exhausted_surface_last_error(tmp_path, monkeypatch):
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda _s: None)
+    session = FlakySession(
+        [_raise_connection_error, _raise_connection_error, _raise_connection_error]
+    )
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        request_pause_s=0.0,
+        max_retries=2,
+    )
+    with pytest.raises(requests.ConnectionError):
+        c.fetch("congresstrading", page_size=10, force=True)
+    assert session.calls == 3  # initial + 2 retries
+
+
+def test_does_not_retry_on_401(tmp_path):
+    session = FlakySession([FakeResponse({}, status_code=401)])
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        max_retries=5,
+    )
+    with pytest.raises(AuthError):
+        c.fetch("congresstrading", page_size=10, force=True)
+    assert session.calls == 1
+
+
+def test_does_not_retry_on_429(tmp_path):
+    session = FlakySession(
+        [FakeResponse({}, status_code=429, headers={"Retry-After": "60"})]
+    )
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        max_retries=5,
+    )
+    with pytest.raises(RateLimitError):
+        c.fetch("congresstrading", page_size=10, force=True)
+    assert session.calls == 1
+
+
+def test_request_pause_zero_disables_sleeping(tmp_path, monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda s: sleeps.append(s))
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=FakeSession(
+            [FakeResponse({"data": [congress_row()]}), FakeResponse({"data": []})]
+        ),
+        rate_limit_policy="off",
+        request_pause_s=0.0,
+    )
+    c.fetch("congresstrading", page_size=1)
+    assert sleeps == []
 
 
 def test_on_truncated_warn_returns_partial_and_does_not_cache(tmp_path):

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Iterable
 
-from .catalog import DATASETS, get_dataset
+from .cache import default_cache_dir
+from .catalog import all_datasets, get_dataset
 from .client import Client
 from .errors import CatalogDriftError, QuiverFeedError
 
@@ -44,11 +47,22 @@ def diagnose(
     *,
     client: Client | None = None,
     page_size: int = 1,
+    cache_ttl: timedelta = timedelta(hours=1),
+    force: bool = False,
+    cache_dir: Path | str | None = None,
 ) -> DiagnoseReport:
     active_client = client or Client(token=token)
-    names = tuple(datasets) if datasets is not None else tuple(DATASETS.keys())
-    results: list[DatasetDiagnostic] = []
+    names = tuple(datasets) if datasets is not None else tuple(all_datasets().keys())
 
+    if cache_dir is None and active_client._cache is not None:
+        cache_dir = active_client._cache.cache_dir
+    cache_path = _diagnose_cache_path(cache_dir, names)
+    if not force:
+        cached = _load_report(cache_path, cache_ttl)
+        if cached is not None:
+            return cached
+
+    results: list[DatasetDiagnostic] = []
     for name in names:
         dataset = get_dataset(name)
         if dataset is None:
@@ -100,4 +114,59 @@ def diagnose(
                 )
             )
 
-    return DiagnoseReport(generated_at=datetime.now(UTC), results=tuple(results))
+    report = DiagnoseReport(generated_at=datetime.now(UTC), results=tuple(results))
+    _save_report(cache_path, report)
+    return report
+
+
+def _diagnose_cache_path(cache_dir: Path | str | None, names: tuple[str, ...]) -> Path:
+    root = Path(cache_dir) if cache_dir is not None else default_cache_dir()
+    # Names are part of the filename so a partial diagnose() doesn't satisfy
+    # a full-catalog cache hit and vice versa.
+    key = "_".join(sorted(names)) or "empty"
+    return root / "diagnose" / f"{key}.json"
+
+
+def _load_report(path: Path, ttl: timedelta) -> DiagnoseReport | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        generated_at = datetime.fromisoformat(payload["generated_at"])
+        if generated_at.tzinfo is None:
+            generated_at = generated_at.replace(tzinfo=UTC)
+        if datetime.now(UTC) - generated_at > ttl:
+            return None
+        results = tuple(
+            DatasetDiagnostic(
+                dataset=r["dataset"],
+                ok=r["ok"],
+                row_count=r["row_count"],
+                columns=tuple(r["columns"]),
+                message=r.get("message", ""),
+            )
+            for r in payload["results"]
+        )
+        return DiagnoseReport(generated_at=generated_at, results=results)
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _save_report(path: Path, report: DiagnoseReport) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "generated_at": report.generated_at.isoformat(),
+        "results": [
+            {
+                "dataset": r.dataset,
+                "ok": r.ok,
+                "row_count": r.row_count,
+                "columns": list(r.columns),
+                "message": r.message,
+            }
+            for r in report.results
+        ],
+    }
+    tmp = path.with_suffix(".tmp.json")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)

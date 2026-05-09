@@ -32,10 +32,11 @@ _DATASETS: dict[str, Dataset] = {
         event_col="Traded",
         disclosure_col="Filed",
         ignored_params=("date_from", "date_to"),
-        default_params=(("version", "V2"),),
         notes=(
             "Congressional stock trades. Use available_at/Filed for "
-            "point-in-time analysis; Traded is the event date."
+            "point-in-time analysis; Traded is the event date. Pass "
+            "version='V2' explicitly to opt into the V2 schema; default "
+            "sends no version, matching the published API examples."
         ),
     ),
     "insiders": Dataset(
@@ -73,23 +74,60 @@ _DATASETS: dict[str, Dataset] = {
             "as event_time; no separate disclosure date is advertised."
         ),
     ),
+    "politicians": Dataset(
+        name="politicians",
+        path="/beta/bulk/congress/politicians",
+        plan="hobbyist",
+        event_col=None,
+        disclosure_col=None,
+        notes=(
+            "Roster of congressional traders, sortable by activity. Reference "
+            "data, not an event stream — no event_time / available_at columns "
+            "are added."
+        ),
+    ),
 }
 
 DATASETS: Mapping[str, Dataset] = MappingProxyType(_DATASETS)
+
+# User-registered datasets via register_dataset(); they override built-ins on
+# name collision so callers can patch a built-in entry whose schema has
+# drifted upstream without forking the package.
+_USER_DATASETS: dict[str, Dataset] = {}
 
 
 def normalize_dataset_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
+def all_datasets() -> dict[str, Dataset]:
+    merged = dict(_DATASETS)
+    merged.update(_USER_DATASETS)
+    return merged
+
+
+def register_dataset(dataset: Dataset, *, replace: bool = False) -> None:
+    if not replace and dataset.name in _USER_DATASETS:
+        raise ValueError(
+            f"Dataset {dataset.name!r} already registered; pass replace=True "
+            "to overwrite."
+        )
+    _USER_DATASETS[dataset.name] = dataset
+
+
+def unregister_dataset(name: str) -> None:
+    _USER_DATASETS.pop(name, None)
+
+
 def get_dataset(name: str) -> Dataset | None:
-    if name in DATASETS:
-        return DATASETS[name]
+    catalog = all_datasets()
+    if name in catalog:
+        return catalog[name]
 
     normalized = normalize_dataset_name(name)
     matches = [
         dataset
-        for key, dataset in DATASETS.items()
+        for key, dataset in catalog.items()
         if normalize_dataset_name(key) == normalized
     ]
     if len(matches) == 1:

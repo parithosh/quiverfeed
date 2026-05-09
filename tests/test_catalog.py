@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import pytest
+
 from quiverfeed.catalog import (
     DATASETS,
     Dataset,
+    all_datasets,
     get_dataset,
     normalize_dataset_name,
+    register_dataset,
+    unregister_dataset,
 )
 
 
@@ -43,11 +48,18 @@ def test_get_dataset_unknown_returns_none():
 
 
 def test_dataset_defaults_returns_fresh_dict():
-    dataset = DATASETS["congresstrading"]
+    dataset = Dataset(
+        name="x",
+        path="/x",
+        plan=None,
+        event_col=None,
+        disclosure_col=None,
+        default_params=(("k", "v"),),
+    )
     first = dataset.defaults()
-    assert first == {"version": "V2"}
-    first["version"] = "MUTATED"
-    assert dataset.defaults() == {"version": "V2"}
+    assert first == {"k": "v"}
+    first["k"] = "MUTATED"
+    assert dataset.defaults() == {"k": "v"}
 
 
 def test_known_datasets_have_required_attributes():
@@ -58,3 +70,55 @@ def test_known_datasets_have_required_attributes():
         # but the catalog must still describe an event column where one exists.
         if dataset.disclosure_col is not None:
             assert dataset.event_col is not None
+
+
+def test_register_dataset_extends_catalog():
+    custom = Dataset(
+        name="custom_alpha",
+        path="/beta/bulk/custom_alpha",
+        plan=None,
+        event_col="Date",
+        disclosure_col=None,
+    )
+    try:
+        register_dataset(custom)
+        assert get_dataset("custom_alpha") is custom
+        assert "custom_alpha" in all_datasets()
+        assert "custom_alpha" not in DATASETS  # built-ins untouched
+    finally:
+        unregister_dataset("custom_alpha")
+
+
+def test_register_dataset_rejects_duplicate_without_replace():
+    custom = Dataset(
+        name="custom_dup",
+        path="/x",
+        plan=None,
+        event_col=None,
+        disclosure_col=None,
+    )
+    register_dataset(custom)
+    try:
+        with pytest.raises(ValueError, match="already registered"):
+            register_dataset(custom)
+        register_dataset(custom, replace=True)  # idempotent under replace
+    finally:
+        unregister_dataset("custom_dup")
+
+
+def test_register_dataset_can_override_builtin():
+    overridden = Dataset(
+        name="congresstrading",
+        path="/beta/bulk/congresstrading",
+        plan="hobbyist",
+        event_col="Traded",
+        disclosure_col="Filed",
+        notes="local override",
+    )
+    try:
+        register_dataset(overridden, replace=True)
+        assert get_dataset("congresstrading") is overridden
+    finally:
+        unregister_dataset("congresstrading")
+        # Built-in re-emerges via all_datasets() merge.
+        assert get_dataset("congresstrading").notes != "local override"

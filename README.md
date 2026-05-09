@@ -82,6 +82,26 @@ late = known[known["available_at"] > known["event_time"]]
 For datasets that do not advertise a separate disclosure date, `quiverfeed`
 adds `event_time` only. It does not fabricate `available_at`.
 
+`validate_pit(df, dataset="...")` is the catalog-aware companion to
+`assert_disclosure_dated`. It raises a clear error when the named dataset has
+no disclosure column at all (rather than the generic "missing available_at"),
+and it asserts the consistency invariant `available_at >= event_time`:
+
+```python
+quiverfeed.validate_pit(df, dataset="congresstrading")
+quiverfeed.validate_pit(df, dataset="lobbying")  # raises: not PIT-capable
+```
+
+### Timezones
+
+By default, canonical date columns are tz-aware UTC. Projects that pin to a
+single zone can ask for naive output or a specific zone:
+
+```python
+quiverfeed.Client(tz=None)                      # tz-naive
+quiverfeed.Client(tz="America/New_York")        # localized to ET
+```
+
 ## Discovery
 
 ```python
@@ -98,6 +118,30 @@ client.fetch("congress_trading")  # resolves to "congresstrading"
 ```
 
 Truly unknown datasets raise `UnknownDatasetError`.
+
+### Custom datasets
+
+Register a `Dataset` to reach an endpoint not in the built-in catalog or to
+override a built-in whose schema has drifted:
+
+```python
+import quiverfeed
+
+quiverfeed.register_dataset(
+    quiverfeed.Dataset(
+        name="my_signal",
+        path="/beta/bulk/my_signal",
+        plan="premium",
+        event_col="event_date",
+        disclosure_col="disclosed_at",
+    )
+)
+
+df = quiverfeed.Client().fetch("my_signal")
+```
+
+`register_dataset(..., replace=True)` overwrites; `unregister_dataset(name)`
+removes a registration.
 
 ## Caching
 
@@ -116,6 +160,12 @@ fresh = client.fetch("congresstrading", force=True)
 
 Partial results from `max_pages` are not cached, because a normal cache hit
 should mean "complete for these params."
+
+The cache is intentionally whole-blob: when the TTL expires, `quiverfeed`
+re-pulls every page rather than attempting an incremental append. This wastes
+requests for append-mostly datasets (e.g. `congresstrading`) but never serves
+stale data when upstream amends a historical filing. If you want longer
+effective freshness, raise `cache_ttl`.
 
 ## Rate Limits
 
@@ -140,30 +190,78 @@ For multiple processes sharing a token:
 client = quiverfeed.Client(bucket_file="~/.cache/quiverfeed/bucket.json")
 ```
 
+`bucket_file=` uses POSIX `fcntl` locking and is **not supported on Windows**.
+On non-POSIX platforms, omit `bucket_file=` and rely on the in-memory bucket.
+Cross-platform coordination would require a third-party file-lock library;
+this is intentionally not pulled in.
+
 ## Pagination
 
-By default, `fetch()` paginates until it receives a short page.
+By default, `fetch()` paginates until it receives a short page. Between pages
+the client sleeps `request_pause_s` seconds (default 1.0) to stay under
+Quiver's per-second/burst behavior, which the hourly token bucket does not
+catch:
 
 ```python
 df = client.fetch("congresstrading", page_size=5000)
+
+# Tighter pacing for offline backfills against your own quota:
+client = quiverfeed.Client(request_pause_s=2.0)
 ```
 
 If you cap pages and the final page is full, the result may be incomplete.
-The default is to raise:
+The default is to warn and return the partial frame — passing `max_pages` is
+treated as opting in to bounded results:
 
 ```python
 df = client.fetch("congresstrading", max_pages=5)
 ```
 
-If you intentionally want a bounded sample:
+If you would rather fail loudly on truncation, opt into raising:
 
 ```python
-sample = client.fetch(
+df = client.fetch(
     "congresstrading",
-    max_pages=1,
-    on_truncated="warn",
+    max_pages=5,
+    on_truncated="raise",
 )
 ```
+
+To suppress the warning entirely, use `on_truncated="ignore"`.
+
+## Retries
+
+Connection errors and `5xx` responses are retried with exponential backoff
+(0.5s base) up to `max_retries` (default 2) extra attempts. `401`, `403`,
+and `429` are never retried — they are explicit signals from upstream.
+Retries do **not** consume extra rate-limit tokens; the bucket charges once
+per logical page request.
+
+```python
+client = quiverfeed.Client(max_retries=2)
+```
+
+## Command-line interface
+
+```bash
+quiverfeed --help
+quiverfeed datasets                                   # list the catalog
+quiverfeed datasets --json
+quiverfeed fetch congresstrading --max-pages 5 --out trades.parquet
+quiverfeed fetch insiders --param chamber=senate --format json
+quiverfeed diagnose                                   # cached health check
+quiverfeed diagnose --force --json
+quiverfeed cache --path
+quiverfeed cache --clear --yes
+```
+
+The token is read from `QUIVER_TOKEN` (or `--token`). Output format is
+inferred from `--out` extension (`.parquet` / `.csv` / `.json`); `--format`
+overrides. With no `--out`, results print to stdout — table by default,
+machine-readable with `--format json` / `csv`.
+
+`python -m quiverfeed ...` works as an alternative if the script entry isn't
+on `PATH`.
 
 ## Catalog Diagnostics
 
@@ -175,6 +273,14 @@ import quiverfeed
 
 report = quiverfeed.diagnose()
 print(report.to_text())
+```
+
+Reports are cached for one hour by default to avoid burning rate-limit
+tokens on repeated health checks. Pass `force=True` to bypass the cache or
+shorten `cache_ttl` if you want fresher results:
+
+```python
+report = quiverfeed.diagnose(force=True)
 ```
 
 This performs real API calls and consumes rate-limit budget.
