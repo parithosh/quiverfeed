@@ -112,11 +112,20 @@ def test_page_and_page_size_params_are_reserved(tmp_path):
         c.fetch("congresstrading", page=2)
 
 
-def test_max_pages_full_final_page_raises(tmp_path):
+def test_max_pages_full_final_page_raises_when_requested(tmp_path):
     c = client(tmp_path, [FakeResponse({"data": [congress_row()]})])
 
     with pytest.raises(TruncatedResultError):
-        c.fetch("congresstrading", page_size=1, max_pages=1)
+        c.fetch("congresstrading", page_size=1, max_pages=1, on_truncated="raise")
+
+
+def test_max_pages_full_final_page_warns_by_default(tmp_path):
+    c = client(tmp_path, [FakeResponse({"data": [congress_row()]})])
+
+    with pytest.warns(TruncatedResultWarning):
+        partial = c.fetch("congresstrading", page_size=1, max_pages=1)
+
+    assert len(partial) == 1
 
 
 def test_on_truncated_warn_returns_partial_and_does_not_cache(tmp_path):

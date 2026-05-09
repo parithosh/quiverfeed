@@ -149,21 +149,24 @@ df = client.fetch("congresstrading", page_size=5000)
 ```
 
 If you cap pages and the final page is full, the result may be incomplete.
-The default is to raise:
+The default is to warn and return the partial frame — passing `max_pages` is
+treated as opting in to bounded results:
 
 ```python
 df = client.fetch("congresstrading", max_pages=5)
 ```
 
-If you intentionally want a bounded sample:
+If you would rather fail loudly on truncation, opt into raising:
 
 ```python
-sample = client.fetch(
+df = client.fetch(
     "congresstrading",
-    max_pages=1,
-    on_truncated="warn",
+    max_pages=5,
+    on_truncated="raise",
 )
 ```
+
+To suppress the warning entirely, use `on_truncated="ignore"`.
 
 ## Catalog Diagnostics
 

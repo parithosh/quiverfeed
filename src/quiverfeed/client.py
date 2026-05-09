@@ -68,7 +68,7 @@ class Client:
         dataset: str,
         page_size: int = 5000,
         max_pages: int | None = None,
-        on_truncated: OnTruncated = "raise",
+        on_truncated: OnTruncated = "warn",
         force: bool = False,
         **params: Any,
     ) -> pd.DataFrame:
