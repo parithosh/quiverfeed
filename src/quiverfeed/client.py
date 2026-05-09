@@ -47,6 +47,7 @@ class Client:
         timeout: tuple[float, float] = (5, 30),
         strict_catalog: bool = True,
         request_pause_s: float = 1.0,
+        tz: str | None = "UTC",
         *,
         session: requests.Session | None = None,
         base_url: str = DEFAULT_BASE_URL,
@@ -59,6 +60,7 @@ class Client:
         self.timeout = timeout
         self.strict_catalog = strict_catalog
         self.request_pause_s = request_pause_s
+        self.tz = tz
         self.base_url = base_url
         self._sleep = sleep
         self._session = session or requests.Session()
@@ -234,7 +236,16 @@ class Client:
                 stacklevel=2,
             )
             return
-        df[target_col] = pd.to_datetime(df[source_col], utc=True)
+        # Parse to UTC consistently, then project to caller-requested tz.
+        # tz=None ⇒ naive output (lossy for tz-aware sources, intentional
+        # for projects pinned to a single zone). tz="UTC" ⇒ unchanged.
+        parsed = pd.to_datetime(df[source_col], utc=True)
+        if self.tz is None:
+            df[target_col] = parsed.dt.tz_localize(None)
+        elif self.tz == "UTC":
+            df[target_col] = parsed
+        else:
+            df[target_col] = parsed.dt.tz_convert(self.tz)
 
     @staticmethod
     def _warn_ignored_params(dataset: Dataset, params: Mapping[str, Any]) -> None:

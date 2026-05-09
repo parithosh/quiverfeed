@@ -149,6 +149,33 @@ def test_request_pause_fires_between_pages_only(tmp_path):
     assert sleeps == [0.25, 0.25]
 
 
+def test_tz_none_returns_naive_timestamps(tmp_path):
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=FakeSession([FakeResponse({"data": [congress_row()]})]),
+        rate_limit_policy="off",
+        tz=None,
+    )
+    df = c.fetch("congresstrading", page_size=10)
+    assert df["event_time"].dt.tz is None
+    assert df["available_at"].dt.tz is None
+    assert df.loc[0, "event_time"].isoformat() == "2024-01-03T00:00:00"
+    assert df.loc[0, "available_at"].isoformat() == "2024-01-10T00:00:00"
+
+
+def test_tz_named_zone_converts(tmp_path):
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=FakeSession([FakeResponse({"data": [congress_row()]})]),
+        rate_limit_policy="off",
+        tz="America/New_York",
+    )
+    df = c.fetch("congresstrading", page_size=10)
+    assert str(df["available_at"].dt.tz) == "America/New_York"
+
+
 def test_request_pause_zero_disables_sleeping(tmp_path):
     sleeps: list[float] = []
     c = quiverfeed.Client(

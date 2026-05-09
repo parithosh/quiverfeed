@@ -82,6 +82,16 @@ late = known[known["available_at"] > known["event_time"]]
 For datasets that do not advertise a separate disclosure date, `quiverfeed`
 adds `event_time` only. It does not fabricate `available_at`.
 
+### Timezones
+
+By default, canonical date columns are tz-aware UTC. Projects that pin to a
+single zone can ask for naive output or a specific zone:
+
+```python
+quiverfeed.Client(tz=None)                      # tz-naive
+quiverfeed.Client(tz="America/New_York")        # localized to ET
+```
+
 ## Discovery
 
 ```python
