@@ -13,14 +13,24 @@ For backtests and historical analysis, use `available_at`.
 ## Install
 
 ```bash
-pip install quiverfeed
+uv pip install quiverfeed
 ```
 
 For local development:
 
 ```bash
-pip install -e ".[dev]"
+uv venv
+uv pip install -e ".[dev]"
 ```
+
+Or, using `uv sync` against the lockfile:
+
+```bash
+uv sync --extra dev
+```
+
+If you don't have `uv`, install it from [astral.sh/uv](https://docs.astral.sh/uv/) or
+fall back to plain `pip install quiverfeed` / `pip install -e ".[dev]"`.
 
 ## Quickstart
 
@@ -169,9 +179,3 @@ print(report.to_text())
 
 This performs real API calls and consumes rate-limit budget.
 
-## Compared With `quiverquant`
-
-`quiverquant` is Quiver's lightweight method-oriented package and is useful for
-quick pulls. `quiverfeed` is stricter: it is built around point-in-time date
-semantics, caching, rate-limit hygiene, pagination, typed errors, and catalog
-drift checks.
