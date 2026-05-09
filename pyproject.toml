@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -46,8 +46,9 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.dynamic]
-version = { attr = "quiverfeed._version.__version__" }
+[tool.setuptools_scm]
+version_file = "src/quiverfeed/_version.py"
+fallback_version = "0.0.0+local"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
