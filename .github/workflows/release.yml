@@ -7,6 +7,12 @@
 # Authentication uses PyPI Trusted Publishing (OIDC). No API token is stored
 # in the repo or in GitHub secrets. PyPI side requires a publisher pointing
 # at this exact workflow file and the `pypi` environment.
+#
+# Release notes / GitHub Release object are managed manually via the
+# "Draft new release" UI. That action creates the tag, which fires this
+# workflow. The CI does not touch the GitHub Release object itself —
+# install via `pip install quiverfeed`, not by downloading artifacts from
+# the release page.
 
 name: Release
 
@@ -97,32 +103,3 @@ jobs:
           path: dist/
 
       - uses: pypa/gh-action-pypi-publish@release/v1
-
-  github-release:
-    name: Create GitHub Release
-    needs: publish
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: dist
-          path: dist/
-
-      - name: Create or update GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME already exists; uploading dist artifacts."
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" \
-              --title "$GITHUB_REF_NAME" \
-              --generate-notes \
-              dist/*
-          fi
