@@ -1,8 +1,8 @@
 # Release workflow: builds quiverfeed and publishes to PyPI on tag push.
 #
-# Triggered by pushing a tag `v<MAJOR>.<MINOR>.<PATCH>` (e.g. v0.1.0). The tag
-# must match the version declared in src/quiverfeed/_version.py — a mismatch
-# fails the build before anything is published.
+# Triggered by pushing a tag `v<MAJOR>.<MINOR>.<PATCH>` (e.g. v0.1.0). The
+# version is derived from the tag itself by setuptools-scm at build time —
+# no _version.py to keep in sync, no chance of tag/version drift.
 #
 # Authentication uses PyPI Trusted Publishing (OIDC). No API token is stored
 # in the repo or in GitHub secrets. PyPI side requires a publisher pointing
@@ -27,21 +27,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # setuptools-scm needs the tag (and ideally history) to derive
+          # the version. Tag-triggered runs check out the tag commit, but
+          # full history makes setuptools-scm more robust.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
-      - name: Verify tag matches package version
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME#v}"
-          PKG=$(python -c "import re,sys; t=open('src/quiverfeed/_version.py').read(); print(re.search(r'\"([^\"]+)\"', t).group(1))")
-          echo "tag=$TAG pkg=$PKG"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "::error::Tag v$TAG does not match package version $PKG"
-            exit 1
-          fi
 
       - name: Build sdist and wheel
         run: |

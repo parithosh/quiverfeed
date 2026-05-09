@@ -380,7 +380,7 @@ wheels = [
 
 [[package]]
 name = "quiverfeed"
-version = "0.1.0"
+version = "0.0.1.dev19+local.g6574d1383.d20260509"
 source = { editable = "." }
 dependencies = [
     { name = "pandas" },
