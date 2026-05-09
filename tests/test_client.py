@@ -176,6 +176,130 @@ def test_tz_named_zone_converts(tmp_path):
     assert str(df["available_at"].dt.tz) == "America/New_York"
 
 
+class FlakySession:
+    """Session that emits a sequence of responses or callables-that-raise."""
+
+    def __init__(self, sequence):
+        self.sequence = list(sequence)
+        self.calls = 0
+
+    def get(self, url, headers, params, timeout):
+        self.calls += 1
+        if not self.sequence:
+            raise AssertionError("No fake responses left")
+        item = self.sequence.pop(0)
+        if callable(item):
+            return item()
+        return item
+
+
+def _raise_connection_error():
+    raise requests.ConnectionError("boom")
+
+
+def test_retries_on_connection_error_then_succeeds(tmp_path):
+    sleeps: list[float] = []
+    session = FlakySession(
+        [
+            _raise_connection_error,
+            FakeResponse({"data": []}),
+        ]
+    )
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        request_pause_s=0.0,
+        max_retries=2,
+        retry_backoff_s=0.1,
+        sleep=sleeps.append,
+    )
+    df = c.fetch("congresstrading", page_size=10)
+    assert df.empty
+    assert session.calls == 2
+    assert sleeps == [0.1]  # one backoff between attempts
+
+
+def test_retries_on_5xx_then_succeeds(tmp_path):
+    sleeps: list[float] = []
+    session = FlakySession(
+        [
+            FakeResponse({}, status_code=503),
+            FakeResponse({"data": []}),
+        ]
+    )
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        request_pause_s=0.0,
+        max_retries=2,
+        retry_backoff_s=0.1,
+        sleep=sleeps.append,
+    )
+    df = c.fetch("congresstrading", page_size=10)
+    assert df.empty
+    assert session.calls == 2
+    assert sleeps == [0.1]
+
+
+def test_retries_exhausted_surface_last_error(tmp_path):
+    session = FlakySession(
+        [
+            _raise_connection_error,
+            _raise_connection_error,
+            _raise_connection_error,
+        ]
+    )
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        request_pause_s=0.0,
+        max_retries=2,
+        retry_backoff_s=0.0,
+        sleep=lambda _: None,
+    )
+    with pytest.raises(requests.ConnectionError):
+        c.fetch("congresstrading", page_size=10, force=True)
+    assert session.calls == 3  # initial + 2 retries
+
+
+def test_does_not_retry_on_401(tmp_path):
+    session = FlakySession([FakeResponse({}, status_code=401)])
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        max_retries=5,
+        sleep=lambda _: None,
+    )
+    with pytest.raises(AuthError):
+        c.fetch("congresstrading", page_size=10, force=True)
+    assert session.calls == 1
+
+
+def test_does_not_retry_on_429(tmp_path):
+    session = FlakySession(
+        [FakeResponse({}, status_code=429, headers={"Retry-After": "60"})]
+    )
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        max_retries=5,
+        sleep=lambda _: None,
+    )
+    with pytest.raises(RateLimitError):
+        c.fetch("congresstrading", page_size=10, force=True)
+    assert session.calls == 1
+
+
 def test_request_pause_zero_disables_sleeping(tmp_path):
     sleeps: list[float] = []
     c = quiverfeed.Client(

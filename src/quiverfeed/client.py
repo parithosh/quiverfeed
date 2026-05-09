@@ -48,6 +48,8 @@ class Client:
         strict_catalog: bool = True,
         request_pause_s: float = 1.0,
         tz: str | None = "UTC",
+        max_retries: int = 2,
+        retry_backoff_s: float = 0.5,
         *,
         session: requests.Session | None = None,
         base_url: str = DEFAULT_BASE_URL,
@@ -55,12 +57,18 @@ class Client:
     ):
         if request_pause_s < 0:
             raise ValueError("request_pause_s must be >= 0")
+        if max_retries < 0:
+            raise ValueError("max_retries must be >= 0")
+        if retry_backoff_s < 0:
+            raise ValueError("retry_backoff_s must be >= 0")
         self.token = token if token is not None else os.getenv("QUIVER_TOKEN")
         self.cache_ttl = cache_ttl
         self.timeout = timeout
         self.strict_catalog = strict_catalog
         self.request_pause_s = request_pause_s
         self.tz = tz
+        self.max_retries = max_retries
+        self.retry_backoff_s = retry_backoff_s
         self.base_url = base_url
         self._sleep = sleep
         self._session = session or requests.Session()
@@ -161,41 +169,56 @@ class Client:
         }
         url = urljoin(self.base_url.rstrip("/") + "/", dataset.path.lstrip("/"))
 
+        # One bucket charge per logical page request — retries do not consume
+        # extra tokens since the upstream never serviced the original.
         self._bucket.acquire()
-        started = time.perf_counter()
-        response = self._session.get(
-            url,
-            headers=headers,
-            params=params,
-            timeout=self.timeout,
-        )
-        latency = time.perf_counter() - started
-        status_code = getattr(response, "status_code", None)
-        LOGGER.debug(
-            "GET %s status=%s latency=%.3fs page=%s",
-            dataset.path,
-            status_code,
-            latency,
-            page,
-        )
 
-        if status_code == 401:
-            raise AuthError("Quiver returned 401 Unauthorized.")
-        if status_code == 403:
-            raise PlanRequiredError(dataset.name, _response_text(response), dataset.plan)
-        if status_code == 429:
-            retry_after = _retry_after(response)
-            raise RateLimitError(retry_after)
-        if status_code is not None and status_code >= 400:
-            response.raise_for_status()
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self._http_get(url, headers, params)
+            except (requests.ConnectionError, requests.Timeout):
+                if attempt >= self.max_retries:
+                    raise
+                self._sleep(self.retry_backoff_s * (2**attempt))
+                continue
 
-        payload = response.json()
-        if isinstance(payload, list):
-            return _ensure_rows(dataset.name, payload)
-        if isinstance(payload, dict) and isinstance(payload.get("data"), list):
-            return _ensure_rows(dataset.name, payload["data"])
+            status_code = getattr(response, "status_code", None)
+            LOGGER.debug(
+                "GET %s status=%s page=%s attempt=%d",
+                dataset.path,
+                status_code,
+                page,
+                attempt,
+            )
 
-        raise ResponseShapeError(dataset.name, type(payload).__name__)
+            if status_code is not None and 500 <= status_code < 600:
+                if attempt >= self.max_retries:
+                    response.raise_for_status()
+                self._sleep(self.retry_backoff_s * (2**attempt))
+                continue
+
+            if status_code == 401:
+                raise AuthError("Quiver returned 401 Unauthorized.")
+            if status_code == 403:
+                raise PlanRequiredError(dataset.name, _response_text(response), dataset.plan)
+            if status_code == 429:
+                raise RateLimitError(_retry_after(response))
+            if status_code is not None and status_code >= 400:
+                response.raise_for_status()
+
+            payload = response.json()
+            if isinstance(payload, list):
+                return _ensure_rows(dataset.name, payload)
+            if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+                return _ensure_rows(dataset.name, payload["data"])
+
+            raise ResponseShapeError(dataset.name, type(payload).__name__)
+
+        # The loop either returns or raises; this line is unreachable.
+        raise AssertionError("unreachable")
+
+    def _http_get(self, url: str, headers: Mapping[str, str], params: Mapping[str, Any]):
+        return self._session.get(url, headers=headers, params=params, timeout=self.timeout)
 
     def _to_dataframe(
         self,
