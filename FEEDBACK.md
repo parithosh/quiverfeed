@@ -52,14 +52,15 @@ There's no way to reach it through `quiverfeed` without forking the package.
 expose a `Client.request(path, params)` low-level method as escape hatch for
 endpoints not yet catalogued.
 
-### 6. Single-blob TTL cache, no incremental fetch
-`congresstrading` is append-mostly with occasional restatements. Today, a
-7-day TTL means stale signals or a full re-pull on every refresh. The cockpit
-implementation has the same limitation — but a research client should improve
-on this.
-
-**Fix:** out of scope for this branch; tracked as a follow-up. Add a doc note
-in the README that today's cache is whole-blob.
+### 6. Single-blob TTL cache, no incremental fetch — *by design*
+`congresstrading` is append-mostly with occasional restatements. A
+fully-correct incremental cache must detect upstream restatements (filings
+get amended), and getting that wrong silently serves stale data. After
+reviewing the trade-off, the decision is to keep whole-blob TTL: re-pulling
+on TTL expiry wastes requests but never serves stale data. This matches the
+prototype `cockpit.quiver_bulk` it replaces, where the same call was made
+deliberately. Document the trade-off in the README; do not add an
+incremental path.
 
 ### 7. No retries on transient errors
 A single 5xx or connection blip kills a multi-page fetch and burns the
@@ -112,8 +113,14 @@ Says `>=3.11`. Tradoor pins `>=3.14,<3.15`. Probably fine, but worth noting if
 
 ## Deferred (tracked, not in this branch)
 
-- #6 incremental cache
-- #10 PyPI publish
-- #11.b Windows file-lock support
-- Async client
-- CLI (`python -m quiverfeed fetch ...`)
+- #10 PyPI publish — gated on tradoor integration validating the new API.
+- Async client — defer until a real user asks; sync is the right shape for a
+  20/hr bucket.
+
+## Decided not to do
+
+- #6 incremental cache — see above. Whole-blob TTL is correct-by-default.
+- #11.b cross-platform file-lock — `bucket_file=` stays POSIX-only.
+  Windows + multi-process coordination raises a clear error with a pointer
+  to the in-memory bucket. Adding a `portalocker` runtime dep for a feature
+  no current user needs isn't worth it.

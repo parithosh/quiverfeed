@@ -161,6 +161,12 @@ fresh = client.fetch("congresstrading", force=True)
 Partial results from `max_pages` are not cached, because a normal cache hit
 should mean "complete for these params."
 
+The cache is intentionally whole-blob: when the TTL expires, `quiverfeed`
+re-pulls every page rather than attempting an incremental append. This wastes
+requests for append-mostly datasets (e.g. `congresstrading`) but never serves
+stale data when upstream amends a historical filing. If you want longer
+effective freshness, raise `cache_ttl`.
+
 ## Rate Limits
 
 The default local limiter is conservative:
@@ -183,6 +189,11 @@ For multiple processes sharing a token:
 ```python
 client = quiverfeed.Client(bucket_file="~/.cache/quiverfeed/bucket.json")
 ```
+
+`bucket_file=` uses POSIX `fcntl` locking and is **not supported on Windows**.
+On non-POSIX platforms, omit `bucket_file=` and rely on the in-memory bucket.
+Cross-platform coordination would require a third-party file-lock library;
+this is intentionally not pulled in.
 
 ## Pagination
 

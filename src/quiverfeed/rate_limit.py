@@ -96,7 +96,15 @@ class TokenBucket:
         assert self.bucket_file is not None
         self.bucket_file.parent.mkdir(parents=True, exist_ok=True)
 
-        import fcntl
+        try:
+            import fcntl
+        except ImportError as exc:  # pragma: no cover — Windows / non-POSIX
+            raise RuntimeError(
+                "bucket_file= requires fcntl, which is POSIX-only. "
+                "Multi-process rate-limit coordination is not supported on "
+                "this platform; use the in-memory bucket (omit bucket_file=) "
+                "or run the coordinating process on Linux/macOS."
+            ) from exc
 
         with self.bucket_file.open("a+", encoding="utf-8") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
