@@ -231,14 +231,14 @@ To suppress the warning entirely, use `on_truncated="ignore"`.
 
 ## Retries
 
-Connection errors and `5xx` responses are retried with jittered exponential
-backoff up to `max_retries` (default 2) extra attempts. `401`, `403`, and
-`429` are never retried — they are explicit signals from upstream. Retries
-do **not** consume extra rate-limit tokens; the bucket charges once per
-logical page request.
+Connection errors and `5xx` responses are retried with exponential backoff
+(0.5s base) up to `max_retries` (default 2) extra attempts. `401`, `403`,
+and `429` are never retried — they are explicit signals from upstream.
+Retries do **not** consume extra rate-limit tokens; the bucket charges once
+per logical page request.
 
 ```python
-client = quiverfeed.Client(max_retries=2, retry_backoff_s=0.5)
+client = quiverfeed.Client(max_retries=2)
 ```
 
 ## Command-line interface

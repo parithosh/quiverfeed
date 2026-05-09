@@ -80,9 +80,6 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     )
     fmt = _infer_format(args.out, args.format)
     _write_dataframe(df, fmt, args.out)
-    if args.out is None and fmt == "table":
-        # Footer only when going to terminal; suppress when piping to JSON/CSV.
-        sys.stderr.write(f"\n{len(df):,} rows\n")
     return 0
 
 

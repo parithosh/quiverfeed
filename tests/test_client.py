@@ -128,8 +128,9 @@ def test_max_pages_full_final_page_warns_by_default(tmp_path):
     assert len(partial) == 1
 
 
-def test_request_pause_fires_between_pages_only(tmp_path):
+def test_request_pause_fires_between_pages_only(tmp_path, monkeypatch):
     sleeps: list[float] = []
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda s: sleeps.append(s))
     c = quiverfeed.Client(
         token="token",
         cache_dir=tmp_path,
@@ -142,7 +143,6 @@ def test_request_pause_fires_between_pages_only(tmp_path):
         ),
         rate_limit_policy="off",
         request_pause_s=0.25,
-        sleep=sleeps.append,
     )
     c.fetch("congresstrading", page_size=1)
     # Three HTTP calls, two inter-page gaps.
@@ -197,14 +197,10 @@ def _raise_connection_error():
     raise requests.ConnectionError("boom")
 
 
-def test_retries_on_connection_error_then_succeeds(tmp_path):
+def test_retries_on_connection_error_then_succeeds(tmp_path, monkeypatch):
     sleeps: list[float] = []
-    session = FlakySession(
-        [
-            _raise_connection_error,
-            FakeResponse({"data": []}),
-        ]
-    )
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda s: sleeps.append(s))
+    session = FlakySession([_raise_connection_error, FakeResponse({"data": []})])
     c = quiverfeed.Client(
         token="token",
         cache_dir=tmp_path,
@@ -212,22 +208,18 @@ def test_retries_on_connection_error_then_succeeds(tmp_path):
         rate_limit_policy="off",
         request_pause_s=0.0,
         max_retries=2,
-        retry_backoff_s=0.1,
-        sleep=sleeps.append,
     )
     df = c.fetch("congresstrading", page_size=10)
     assert df.empty
     assert session.calls == 2
-    assert sleeps == [0.1]  # one backoff between attempts
+    assert sleeps == [0.5]  # base backoff (RETRY_BACKOFF_S) between attempts 0 and 1
 
 
-def test_retries_on_5xx_then_succeeds(tmp_path):
+def test_retries_on_5xx_then_succeeds(tmp_path, monkeypatch):
     sleeps: list[float] = []
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda s: sleeps.append(s))
     session = FlakySession(
-        [
-            FakeResponse({}, status_code=503),
-            FakeResponse({"data": []}),
-        ]
+        [FakeResponse({}, status_code=503), FakeResponse({"data": []})]
     )
     c = quiverfeed.Client(
         token="token",
@@ -236,22 +228,17 @@ def test_retries_on_5xx_then_succeeds(tmp_path):
         rate_limit_policy="off",
         request_pause_s=0.0,
         max_retries=2,
-        retry_backoff_s=0.1,
-        sleep=sleeps.append,
     )
     df = c.fetch("congresstrading", page_size=10)
     assert df.empty
     assert session.calls == 2
-    assert sleeps == [0.1]
+    assert sleeps == [0.5]
 
 
-def test_retries_exhausted_surface_last_error(tmp_path):
+def test_retries_exhausted_surface_last_error(tmp_path, monkeypatch):
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda _s: None)
     session = FlakySession(
-        [
-            _raise_connection_error,
-            _raise_connection_error,
-            _raise_connection_error,
-        ]
+        [_raise_connection_error, _raise_connection_error, _raise_connection_error]
     )
     c = quiverfeed.Client(
         token="token",
@@ -260,8 +247,6 @@ def test_retries_exhausted_surface_last_error(tmp_path):
         rate_limit_policy="off",
         request_pause_s=0.0,
         max_retries=2,
-        retry_backoff_s=0.0,
-        sleep=lambda _: None,
     )
     with pytest.raises(requests.ConnectionError):
         c.fetch("congresstrading", page_size=10, force=True)
@@ -276,7 +261,6 @@ def test_does_not_retry_on_401(tmp_path):
         session=session,
         rate_limit_policy="off",
         max_retries=5,
-        sleep=lambda _: None,
     )
     with pytest.raises(AuthError):
         c.fetch("congresstrading", page_size=10, force=True)
@@ -293,27 +277,23 @@ def test_does_not_retry_on_429(tmp_path):
         session=session,
         rate_limit_policy="off",
         max_retries=5,
-        sleep=lambda _: None,
     )
     with pytest.raises(RateLimitError):
         c.fetch("congresstrading", page_size=10, force=True)
     assert session.calls == 1
 
 
-def test_request_pause_zero_disables_sleeping(tmp_path):
+def test_request_pause_zero_disables_sleeping(tmp_path, monkeypatch):
     sleeps: list[float] = []
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda s: sleeps.append(s))
     c = quiverfeed.Client(
         token="token",
         cache_dir=tmp_path,
         session=FakeSession(
-            [
-                FakeResponse({"data": [congress_row()]}),
-                FakeResponse({"data": []}),
-            ]
+            [FakeResponse({"data": [congress_row()]}), FakeResponse({"data": []})]
         ),
         rate_limit_policy="off",
         request_pause_s=0.0,
-        sleep=sleeps.append,
     )
     c.fetch("congresstrading", page_size=1)
     assert sleeps == []

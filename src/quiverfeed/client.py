@@ -6,7 +6,7 @@ import time
 import warnings
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Literal, Mapping
 from urllib.parse import urljoin
 
 import pandas as pd
@@ -33,6 +33,7 @@ OnTruncated = Literal["raise", "warn", "ignore"]
 
 LOGGER = logging.getLogger("quiverfeed")
 DEFAULT_BASE_URL = "https://api.quiverquant.com"
+RETRY_BACKOFF_S = 0.5  # base for exponential retry; tune via subclass if needed
 
 
 class Client:
@@ -49,18 +50,10 @@ class Client:
         request_pause_s: float = 1.0,
         tz: str | None = "UTC",
         max_retries: int = 2,
-        retry_backoff_s: float = 0.5,
         *,
         session: requests.Session | None = None,
         base_url: str = DEFAULT_BASE_URL,
-        sleep: Callable[[float], None] = time.sleep,
     ):
-        if request_pause_s < 0:
-            raise ValueError("request_pause_s must be >= 0")
-        if max_retries < 0:
-            raise ValueError("max_retries must be >= 0")
-        if retry_backoff_s < 0:
-            raise ValueError("retry_backoff_s must be >= 0")
         self.token = token if token is not None else os.getenv("QUIVER_TOKEN")
         self.cache_ttl = cache_ttl
         self.timeout = timeout
@@ -68,9 +61,7 @@ class Client:
         self.request_pause_s = request_pause_s
         self.tz = tz
         self.max_retries = max_retries
-        self.retry_backoff_s = retry_backoff_s
         self.base_url = base_url
-        self._sleep = sleep
         self._session = session or requests.Session()
         self._cache = CacheStore(cache_dir)
         self._bucket = TokenBucket(
@@ -131,7 +122,7 @@ class Client:
             # daily-budget burn, but Quiver also appears to apply a
             # per-second/burst rule that the bucket doesn't catch.
             if self.request_pause_s > 0:
-                self._sleep(self.request_pause_s)
+                time.sleep(self.request_pause_s)
 
         df = self._to_dataframe(dataset_meta, rows)
         if truncated:
@@ -173,28 +164,28 @@ class Client:
         # extra tokens since the upstream never serviced the original.
         self._bucket.acquire()
 
-        for attempt in range(self.max_retries + 1):
+        attempt = 0
+        while True:
             try:
-                response = self._http_get(url, headers, params)
+                response = self._session.get(url, headers=headers, params=params, timeout=self.timeout)
             except (requests.ConnectionError, requests.Timeout):
                 if attempt >= self.max_retries:
                     raise
-                self._sleep(self.retry_backoff_s * (2**attempt))
+                time.sleep(RETRY_BACKOFF_S * (2**attempt))
+                attempt += 1
                 continue
 
             status_code = getattr(response, "status_code", None)
             LOGGER.debug(
                 "GET %s status=%s page=%s attempt=%d",
-                dataset.path,
-                status_code,
-                page,
-                attempt,
+                dataset.path, status_code, page, attempt,
             )
 
             if status_code is not None and 500 <= status_code < 600:
                 if attempt >= self.max_retries:
                     response.raise_for_status()
-                self._sleep(self.retry_backoff_s * (2**attempt))
+                time.sleep(RETRY_BACKOFF_S * (2**attempt))
+                attempt += 1
                 continue
 
             if status_code == 401:
@@ -214,19 +205,13 @@ class Client:
 
             raise ResponseShapeError(dataset.name, type(payload).__name__)
 
-        # The loop either returns or raises; this line is unreachable.
-        raise AssertionError("unreachable")
-
-    def _http_get(self, url: str, headers: Mapping[str, str], params: Mapping[str, Any]):
-        return self._session.get(url, headers=headers, params=params, timeout=self.timeout)
-
     def _to_dataframe(
         self,
         dataset: Dataset,
         rows: list[Mapping[str, Any]],
     ) -> pd.DataFrame:
         df = pd.DataFrame(rows)
-        if df.empty and len(df.columns) == 0:
+        if df.empty:
             return df
 
         if dataset.event_col is not None:
