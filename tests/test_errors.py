@@ -45,9 +45,18 @@ def test_plan_required_error_without_hint():
 
 
 def test_rate_limit_error_message_uses_seconds():
-    err = RateLimitError(retry_after_s=42)
+    err = RateLimitError(
+        retry_after_s=42,
+        dataset="congresstrading",
+        path="/beta/bulk/congresstrading",
+    )
     assert err.retry_after_s == 42.0
+    assert err.retry_after_seconds == 42.0
+    assert err.reset_at is not None
+    assert err.dataset == "congresstrading"
+    assert err.path == "/beta/bulk/congresstrading"
     assert "42" in str(err)
+    assert "congresstrading" in str(err)
 
 
 def test_catalog_drift_error_lists_missing_and_actual_columns():

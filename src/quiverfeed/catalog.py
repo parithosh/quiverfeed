@@ -18,7 +18,10 @@ class Dataset:
     aliases: tuple[str, ...] = ()
     paginated: bool = True
     ignored_params: tuple[str, ...] = ()
+    stripped_params: tuple[str, ...] = ()
     default_params: tuple[tuple[str, ParamValue], ...] = ()
+    max_page_size: int | None = None
+    param_safety_note: str = ""
     ttl_hours: int | None = None
     notes: str = ""
 
@@ -139,6 +142,12 @@ _DATASETS: dict[str, Dataset] = {
         event_col="Date",
         disclosure_col=None,
         aliases=("lobbying", "corporate_lobbying"),
+        stripped_params=("all", "date_from", "date_to"),
+        max_page_size=5000,
+        param_safety_note=(
+            "date filters and all=True are unstable on /beta/live/lobbying; "
+            "using the paginated endpoint with unsupported parameters removed"
+        ),
         notes=(
             "Live corporate lobbying records. The advertised schema exposes "
             "one Date column, so quiverfeed adds event_time but not "
@@ -246,3 +255,10 @@ def get_dataset(name: str) -> Dataset | None:
     if len(matches) == 1:
         return matches[0]
     return None
+
+
+def resolve_dataset_name(name: str) -> str | None:
+    dataset = get_dataset(name)
+    if dataset is None:
+        return None
+    return dataset.name

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import warnings
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -10,6 +12,7 @@ import quiverfeed
 from quiverfeed.errors import (
     AuthError,
     ParamIgnoredWarning,
+    ParamStrippedWarning,
     PlanRequiredError,
     RateLimitError,
     TruncatedResultError,
@@ -120,6 +123,13 @@ def client(tmp_path, responses, **kwargs):
     )
 
 
+def expire_cache_entry(c, dataset, params):
+    _, meta_path = c._cache._paths(dataset, params)
+    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+    metadata["fetched_at"] = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    meta_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+
 def test_fetch_adds_canonical_dates_and_uses_cache(tmp_path):
     c = client(tmp_path, [FakeResponse({"data": [congress_row()]})])
 
@@ -140,11 +150,25 @@ def test_fetch_adds_canonical_dates_and_uses_cache(tmp_path):
     assert len(c._session.calls) == 1
 
 
+def test_top_level_fetch_delegates_to_client(tmp_path):
+    c = client(tmp_path, [FakeResponse({"data": [congress_row()]})])
+
+    df = quiverfeed.fetch("congresstrading", client=c, page_size=10)
+
+    assert len(df) == 1
+    assert len(c._session.calls) == 1
+
+
 def test_unknown_dataset_raises(tmp_path):
     c = client(tmp_path, [])
 
     with pytest.raises(UnknownDatasetError):
         c.fetch("not-a-dataset")
+
+
+def test_top_level_resolve_uses_aliases():
+    assert quiverfeed.resolve("govcontracts") == "gov_contracts_historical"
+    assert quiverfeed.resolve("lobbying") == "lobbying_live"
 
 
 def test_fetch_accepts_bare_array_response(tmp_path):
@@ -193,6 +217,26 @@ def test_known_ignored_param_warns_but_passes_through(tmp_path):
     assert c._session.calls[0]["params"]["date_from"] == "2024-01-01"
 
 
+def test_known_unsafe_lobbying_params_are_stripped_and_page_size_capped(tmp_path):
+    c = client(tmp_path, [FakeResponse([lobbying_row()])])
+
+    with pytest.warns(ParamStrippedWarning):
+        df = c.fetch(
+            "lobbying",
+            date_from="2019-01-01",
+            date_to="2024-01-01",
+            all=True,
+            page_size=10000,
+        )
+
+    assert len(df) == 1
+    params = c._session.calls[0]["params"]
+    assert "date_from" not in params
+    assert "date_to" not in params
+    assert "all" not in params
+    assert params["page_size"] == 5000
+
+
 def test_page_and_page_size_params_are_reserved(tmp_path):
     c = client(tmp_path, [])
 
@@ -237,6 +281,111 @@ def test_cache_key_includes_path_params(tmp_path):
     assert aapl.loc[0, "Ticker"] == "AAPL"
     assert cached_msft.loc[0, "Ticker"] == "MSFT"
     assert len(c._session.calls) == 2
+
+
+def test_fetch_many_fetches_per_ticker_and_returns_status(tmp_path):
+    c = client(
+        tmp_path,
+        [
+            FakeResponse([{**gov_contract_row(), "Ticker": "MSFT"}]),
+            FakeResponse([{**gov_contract_row(), "Ticker": "LMT"}]),
+        ],
+    )
+
+    df, status = c.fetch_many(
+        "govcontracts",
+        tickers=["MSFT", "LMT"],
+        page_size=5000,
+        resume=True,
+        continue_on_error=True,
+    )
+
+    assert list(df["Ticker"]) == ["MSFT", "LMT"]
+    assert list(status["ticker"]) == ["MSFT", "LMT"]
+    assert list(status["dataset"]) == [
+        "gov_contracts_historical",
+        "gov_contracts_historical",
+    ]
+    assert list(status["status"]) == ["ok", "ok"]
+    assert list(status["rows"]) == [1, 1]
+    assert list(status["cache_status"]) == ["miss", "miss"]
+    assert c._session.calls[0]["url"].endswith("/beta/historical/govcontractsall/MSFT")
+    assert c._session.calls[1]["url"].endswith("/beta/historical/govcontractsall/LMT")
+
+    cached_df, cached_status = c.fetch_many(
+        "govcontracts",
+        tickers=["MSFT", "LMT"],
+        page_size=5000,
+        resume=True,
+        continue_on_error=True,
+    )
+
+    assert len(cached_df) == 2
+    assert list(cached_status["cache_status"]) == ["hit", "hit"]
+    assert len(c._session.calls) == 2
+
+
+def test_fetch_many_records_errors_when_requested(tmp_path):
+    c = client(
+        tmp_path,
+        [
+            FakeResponse([{**gov_contract_row(), "Ticker": "MSFT"}]),
+            FakeResponse({}, status_code=429, headers={"Retry-After": "60"}),
+        ],
+    )
+
+    df, status = c.fetch_many(
+        "govcontracts",
+        tickers=["MSFT", "LMT"],
+        continue_on_error=True,
+    )
+
+    assert list(df["Ticker"]) == ["MSFT"]
+    assert list(status["status"]) == ["ok", "rate_limited"]
+    assert status.loc[1, "retry_after_seconds"] == 60
+    assert status.loc[1, "reset_at"] is not None
+    assert status.loc[1, "error_type"] == "RateLimitError"
+
+
+def test_fetch_many_records_network_errors_when_requested(tmp_path):
+    session = FlakySession([_raise_connection_error])
+    c = quiverfeed.Client(
+        token="token",
+        cache_dir=tmp_path,
+        session=session,
+        rate_limit_policy="off",
+        max_retries=0,
+    )
+
+    df, status = c.fetch_many(
+        "govcontracts",
+        tickers=["MSFT"],
+        continue_on_error=True,
+    )
+
+    assert df.empty
+    assert status.loc[0, "ticker"] == "MSFT"
+    assert status.loc[0, "status"] == "error"
+    assert status.loc[0, "error_type"] == "ConnectionError"
+
+
+def test_fetch_many_does_not_swallow_programmer_errors(tmp_path):
+    c = client(tmp_path, [])
+
+    with pytest.raises(ValueError, match="page_size"):
+        c.fetch_many(
+            "govcontracts",
+            tickers=["MSFT"],
+            page_size=0,
+            continue_on_error=True,
+        )
+
+
+def test_fetch_many_requires_ticker_path_dataset(tmp_path):
+    c = client(tmp_path, [])
+
+    with pytest.raises(ValueError, match="path parameter"):
+        c.fetch_many("congresstrading", tickers=["MSFT"])
 
 
 def test_max_pages_full_final_page_raises_when_requested(tmp_path):
@@ -498,6 +647,49 @@ def test_upstream_429_uses_retry_after(tmp_path):
         c.fetch("congresstrading", page_size=10, force=True)
 
     assert exc.value.retry_after_s == 123
+    assert exc.value.retry_after_seconds == 123
+    assert exc.value.reset_at is not None
+    assert exc.value.dataset == "congresstrading"
+    assert exc.value.path == "/beta/bulk/congresstrading"
+
+
+def test_fetch_can_return_stale_cache_on_rate_limit(tmp_path):
+    c = client(tmp_path, [FakeResponse({"data": [congress_row()]})])
+    c.fetch("congresstrading", page_size=10)
+    expire_cache_entry(c, "congresstrading", {"version": "V2"})
+
+    c._session.responses.append(
+        FakeResponse({}, status_code=429, headers={"Retry-After": "60"})
+    )
+
+    stale = c.fetch("congresstrading", page_size=10, stale_if_rate_limit=True)
+
+    assert len(stale) == 1
+    assert len(c._session.calls) == 2
+
+
+def test_fetch_can_return_stale_cache_on_5xx_after_retries(tmp_path, monkeypatch):
+    monkeypatch.setattr("quiverfeed.client.time.sleep", lambda _s: None)
+    c = client(tmp_path, [FakeResponse({"data": [congress_row()]})], max_retries=0)
+    c.fetch("congresstrading", page_size=10)
+    expire_cache_entry(c, "congresstrading", {"version": "V2"})
+
+    c._session.responses.append(FakeResponse({}, status_code=500))
+
+    stale = c.fetch("congresstrading", page_size=10, stale_if_error=True)
+
+    assert len(stale) == 1
+    assert len(c._session.calls) == 2
+
+
+def test_fetch_without_stale_cache_still_raises_on_rate_limit(tmp_path):
+    c = client(
+        tmp_path,
+        [FakeResponse({}, status_code=429, headers={"Retry-After": "60"})],
+    )
+
+    with pytest.raises(RateLimitError):
+        c.fetch("congresstrading", page_size=10, stale_if_rate_limit=True)
 
 
 @pytest.mark.parametrize(
@@ -648,6 +840,48 @@ def test_canary_profiles_selected_plan(tmp_path):
     assert report.loc[0, "rows"] == 1
     assert bool(report.loc[0, "has_event_time"]) is True
     assert bool(report.loc[0, "has_available_at"]) is True
+
+
+def test_profile_returns_practical_dataset_summary_and_cache_status(tmp_path):
+    c = client(
+        tmp_path,
+        [
+            FakeResponse(
+                {
+                    "data": [
+                        congress_row(),
+                        {
+                            **congress_row(),
+                            "Filed": "2024-01-20",
+                            "Traded": "2024-01-05",
+                            "Ticker": "MSFT",
+                        },
+                    ]
+                }
+            )
+        ],
+    )
+
+    profile = c.profile("congresstrading", page_size=10, max_pages=20)
+
+    assert profile["dataset"] == "congresstrading"
+    assert profile["rows"] == 2
+    assert "event_time" in profile["columns"]
+    assert profile["symbol_count"] == 2
+    assert profile["null_event_time"] == 0
+    assert profile["null_available_at"] == 0
+    assert profile["median_lag"] == pd.Timedelta(days=11)
+    assert profile["p90_lag"] == pd.Timedelta(days=14, hours=4, minutes=48)
+    assert profile["max_lag"] == pd.Timedelta(days=15)
+    assert profile["page_count"] == 1
+    assert profile["cache_status"] == "miss"
+    assert not profile["cache_hit"]
+
+    cached = c.profile("congresstrading", page_size=10, max_pages=20)
+
+    assert cached["cache_status"] == "hit"
+    assert cached["cache_hit"]
+    assert len(c._session.calls) == 1
 
 
 def test_cache_hit_does_not_require_token(tmp_path):

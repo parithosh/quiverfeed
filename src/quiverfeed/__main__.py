@@ -120,6 +120,9 @@ def cmd_datasets(args: argparse.Namespace) -> int:
                 "disclosure_col": d.disclosure_col,
                 "aliases": list(d.aliases),
                 "paginated": d.paginated,
+                "stripped_params": list(d.stripped_params),
+                "max_page_size": d.max_page_size,
+                "param_safety_note": d.param_safety_note,
                 "notes": d.notes,
             }
             for name, d in catalog.items()

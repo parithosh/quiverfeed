@@ -86,14 +86,20 @@ For datasets that do not advertise a separate disclosure date, `quiverfeed`
 adds `event_time` only. It does not fabricate `available_at`.
 
 `validate_pit(df, dataset="...")` is the catalog-aware companion to
-`assert_disclosure_dated`. It raises a clear error when the named dataset has
-no disclosure column at all (rather than the generic "missing available_at"),
-and it asserts the consistency invariant `available_at >= event_time`:
+`assert_disclosure_dated`. It returns a `PITValidationReport` and, by default,
+still raises a clear error when the named dataset has no disclosure column at
+all (rather than the generic "missing available_at") or when the consistency
+invariant `available_at >= event_time` is violated:
 
 ```python
-quiverfeed.validate_pit(df, dataset="congresstrading")
+report = quiverfeed.validate_pit(df, dataset="congresstrading")
+print(report.median_lag, report.p90_lag, report.max_lag)
 quiverfeed.validate_pit(df, dataset="lobbying")  # raises: not PIT-capable
 ```
+
+Use `raise_on_error=False` when you want a report for a bad frame instead of
+an exception. The report includes missing `event_time` / `available_at` counts,
+`available_at < event_time` rows, and lag summaries.
 
 ### Timezones
 
@@ -119,6 +125,7 @@ Dataset names are forgiving for separators:
 ```python
 client.fetch("congress_trading")  # resolves to "congresstrading"
 client.fetch("dark_pool", ticker="AAPL")  # resolves to off_exchange_historical
+quiverfeed.resolve("govcontracts")  # "gov_contracts_historical"
 ```
 
 Truly unknown datasets raise `UnknownDatasetError`.
@@ -131,6 +138,27 @@ client.fetch("gov_contracts_historical", ticker="MSFT")
 client.fetch("off_exchange_historical", ticker="AAPL")
 client.fetch("lobbying_historical", ticker="NVDA")
 ```
+
+For ticker-scoped historical endpoints, `fetch_many()` checkpoints each ticker
+through the normal per-ticker cache and returns a combined frame plus a status
+frame:
+
+```python
+df, status = client.fetch_many(
+    "govcontracts",
+    tickers=["MSFT", "LMT", "RTX"],
+    page_size=5000,
+    resume=True,
+    continue_on_error=True,
+)
+
+print(status[["ticker", "status", "rows", "cache_status", "error"]])
+```
+
+`resume=True` reuses completed cached tickers. `continue_on_error=True` records
+recoverable per-ticker Quiver/network failures, including rate-limit metadata,
+and returns the rows that were fetched successfully. Caller mistakes such as
+invalid arguments still raise immediately.
 
 ### Canary
 
@@ -189,9 +217,20 @@ should mean "complete for these params."
 
 The cache is intentionally whole-blob: when the TTL expires, `quiverfeed`
 re-pulls every page rather than attempting an incremental append. This wastes
-requests for append-mostly datasets (e.g. `congresstrading`) but never serves
-stale data when upstream amends a historical filing. If you want longer
-effective freshness, raise `cache_ttl`.
+requests for append-mostly datasets (e.g. `congresstrading`), but normal cache
+hits still mean "fresh within TTL." If you want longer effective freshness,
+raise `cache_ttl`.
+
+For batch notebooks, you can opt into stale cache fallback when upstream is
+temporarily unavailable or rate-limited:
+
+```python
+df = client.fetch("lobbying", stale_if_error=True)
+df = client.fetch("congresstrading", stale_if_rate_limit=True)
+```
+
+Fresh cache hits are still returned before any request. Stale fallback is only
+used after a matching cached result exists and the attempted request fails.
 
 ## Rate Limits
 
@@ -220,6 +259,15 @@ client = quiverfeed.Client(bucket_file="~/.cache/quiverfeed/bucket.json")
 On non-POSIX platforms, omit `bucket_file=` and rely on the in-memory bucket.
 Cross-platform coordination would require a third-party file-lock library;
 this is intentionally not pulled in.
+
+`RateLimitError` exposes structured fields for notebooks and scripts:
+
+```python
+try:
+    client.fetch("congresstrading", force=True)
+except quiverfeed.RateLimitError as exc:
+    print(exc.retry_after_seconds, exc.reset_at, exc.dataset, exc.path)
+```
 
 ## Pagination
 
@@ -255,6 +303,20 @@ df = client.fetch(
 
 To suppress the warning entirely, use `on_truncated="ignore"`.
 
+## Endpoint Parameter Safety
+
+The catalog records known-unsafe parameter combinations for endpoints that are
+fragile upstream. For example, `/beta/live/lobbying` has shown 500s with date
+filters, `all=True`, and oversized pages. `quiverfeed` strips those unsupported
+query parameters, caps the page size to the known-safe value, and warns:
+
+```python
+df = client.fetch("lobbying", date_from="2019-01-01")
+```
+
+The warning tells you which parameters were removed. The cache key is based on
+the request that is actually sent.
+
 ## Retries
 
 Connection errors and `5xx` responses are retried with exponential backoff
@@ -266,6 +328,19 @@ per logical page request.
 ```python
 client = quiverfeed.Client(max_retries=2)
 ```
+
+## Profiling
+
+Use `profile()` for a bounded, cache-aware dataset summary before committing to
+a larger notebook run:
+
+```python
+profile = client.profile("congresstrading", page_size=10000, max_pages=20)
+print(profile["rows"], profile["symbol_count"], profile["cache_status"])
+```
+
+The profile includes rows, columns, symbol count, canonical date min/max
+values, null date counts, lag quantiles, page count, and cache hit/miss status.
 
 ## Command-line interface
 
