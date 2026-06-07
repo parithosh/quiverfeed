@@ -57,6 +57,9 @@ import quiverfeed
 df = quiverfeed.Client().fetch("congresstrading")
 ```
 
+`congresstrading` defaults to Quiver's V2 response shape so the catalog-backed
+`Traded` and `Filed` PIT columns are present.
+
 ## Point-In-Time Analysis
 
 Congressional trade data has at least two important dates:
@@ -115,9 +118,32 @@ Dataset names are forgiving for separators:
 
 ```python
 client.fetch("congress_trading")  # resolves to "congresstrading"
+client.fetch("dark_pool", ticker="AAPL")  # resolves to off_exchange_historical
 ```
 
 Truly unknown datasets raise `UnknownDatasetError`.
+
+Ticker-scoped endpoints use path parameters. They are URL-encoded into the
+endpoint path and are not also sent as query parameters:
+
+```python
+client.fetch("gov_contracts_historical", ticker="MSFT")
+client.fetch("off_exchange_historical", ticker="AAPL")
+client.fetch("lobbying_historical", ticker="NVDA")
+```
+
+### Canary
+
+Use the canary helper for a low-quota entitlement/schema profile:
+
+```python
+report = quiverfeed.canary(plan="hobbyist", page_size=5, max_pages=1)
+```
+
+It returns one row per matching dataset with the path, status, row count,
+columns, catalog date columns, PIT-column flags, and any error text. Historical
+ticker paths use `sample_ticker="AAPL"` by default; pass another sample ticker
+if that is more representative for your notebook.
 
 ### Custom datasets
 
@@ -248,7 +274,7 @@ quiverfeed --help
 quiverfeed datasets                                   # list the catalog
 quiverfeed datasets --json
 quiverfeed fetch congresstrading --max-pages 5 --out trades.parquet
-quiverfeed fetch insiders --param chamber=senate --format json
+quiverfeed fetch off_exchange_historical --param ticker=AAPL --format json
 quiverfeed diagnose                                   # cached health check
 quiverfeed diagnose --force --json
 quiverfeed cache --path
@@ -284,4 +310,3 @@ report = quiverfeed.diagnose(force=True)
 ```
 
 This performs real API calls and consumes rate-limit budget.
-

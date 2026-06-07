@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -8,7 +9,7 @@ from typing import Iterable
 
 from .cache import default_cache_dir
 from .catalog import all_datasets, get_dataset
-from .client import Client
+from .client import Client, _sample_path_params
 from .errors import CatalogDriftError, QuiverFeedError
 
 
@@ -50,13 +51,14 @@ def diagnose(
     cache_ttl: timedelta = timedelta(hours=1),
     force: bool = False,
     cache_dir: Path | str | None = None,
+    sample_ticker: str = "AAPL",
 ) -> DiagnoseReport:
     active_client = client or Client(token=token)
     names = tuple(datasets) if datasets is not None else tuple(all_datasets().keys())
 
     if cache_dir is None and active_client._cache is not None:
         cache_dir = active_client._cache.cache_dir
-    cache_path = _diagnose_cache_path(cache_dir, names)
+    cache_path = _diagnose_cache_path(cache_dir, names, sample_ticker)
     if not force:
         cached = _load_report(cache_path, cache_ttl)
         if cached is not None:
@@ -78,12 +80,14 @@ def diagnose(
             continue
 
         try:
+            params = _sample_path_params(dataset, sample_ticker=sample_ticker)
             df = active_client.fetch(
                 dataset.name,
                 page_size=page_size,
                 max_pages=1,
                 on_truncated="ignore",
                 force=True,
+                **params,
             )
             results.append(
                 DatasetDiagnostic(
@@ -119,11 +123,35 @@ def diagnose(
     return report
 
 
-def _diagnose_cache_path(cache_dir: Path | str | None, names: tuple[str, ...]) -> Path:
+def canary(
+    token: str | None = None,
+    *,
+    plan: str | None = "hobbyist",
+    page_size: int = 5,
+    max_pages: int = 1,
+    client: Client | None = None,
+    sample_ticker: str = "AAPL",
+):
+    active_client = client or Client(token=token)
+    return active_client.canary(
+        plan=plan,
+        page_size=page_size,
+        max_pages=max_pages,
+        sample_ticker=sample_ticker,
+    )
+
+
+def _diagnose_cache_path(
+    cache_dir: Path | str | None,
+    names: tuple[str, ...],
+    sample_ticker: str,
+) -> Path:
     root = Path(cache_dir) if cache_dir is not None else default_cache_dir()
     # Names are part of the filename so a partial diagnose() doesn't satisfy
     # a full-catalog cache hit and vice versa.
-    key = "_".join(sorted(names)) or "empty"
+    key_parts = (*sorted(names), f"sample_ticker={sample_ticker}")
+    material = json.dumps(key_parts, sort_keys=True, separators=(",", ":"))
+    key = hashlib.sha1(material.encode("utf-8")).hexdigest()
     return root / "diagnose" / f"{key}.json"
 
 

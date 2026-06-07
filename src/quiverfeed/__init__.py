@@ -9,7 +9,7 @@ from .catalog import (
     unregister_dataset,
 )
 from .client import Client
-from .diagnostics import DiagnoseReport, DatasetDiagnostic, diagnose
+from .diagnostics import DiagnoseReport, DatasetDiagnostic, canary, diagnose
 from .errors import (
     AuthError,
     CatalogDriftError,
@@ -44,6 +44,7 @@ __all__ = [
     "UnknownDatasetError",
     "all_datasets",
     "assert_disclosure_dated",
+    "canary",
     "diagnose",
     "validate_pit",
     "register_dataset",

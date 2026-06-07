@@ -43,6 +43,17 @@ def make_client(tmp_path, responses):
     )
 
 
+def sample_row(dataset):
+    row = {"Ticker": "AAPL"}
+    if dataset.event_col is not None:
+        row[dataset.event_col] = "2024-01-03"
+    if dataset.disclosure_col is not None:
+        row[dataset.disclosure_col] = "2024-01-10"
+    if dataset.event_col is None and dataset.disclosure_col is None:
+        row["Name"] = "Example"
+    return row
+
+
 def test_diagnose_reports_unknown_dataset(tmp_path):
     c = make_client(tmp_path, [])
     report = quiverfeed.diagnose(client=c, datasets=["not-a-dataset"])
@@ -115,11 +126,8 @@ def test_diagnose_defaults_to_full_catalog(tmp_path):
     # One response per dataset in the catalog. The fake responses each shape
     # match each dataset's expected event/disclosure cols.
     responses = [
-        FakeResponse({"data": [{"Traded": "2024-01-03", "Filed": "2024-01-10"}]}),
-        FakeResponse({"data": [{"Date": "2024-01-03", "fileDate": "2024-01-10"}]}),
-        FakeResponse({"data": [{"Date": "2024-01-03"}]}),
-        FakeResponse({"data": [{"lastActionDate": "2024-01-03"}]}),
-        FakeResponse({"data": [{"Name": "Example Member"}]}),
+        FakeResponse({"data": [sample_row(dataset)]})
+        for dataset in quiverfeed.DATASETS.values()
     ]
     c = make_client(tmp_path, responses)
     with warnings.catch_warnings():

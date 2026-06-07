@@ -118,6 +118,8 @@ def cmd_datasets(args: argparse.Namespace) -> int:
                 "plan": d.plan,
                 "event_col": d.event_col,
                 "disclosure_col": d.disclosure_col,
+                "aliases": list(d.aliases),
+                "paginated": d.paginated,
                 "notes": d.notes,
             }
             for name, d in catalog.items()
@@ -133,6 +135,8 @@ def cmd_datasets(args: argparse.Namespace) -> int:
             "plan": d.plan or "",
             "event_col": d.event_col or "",
             "disclosure_col": d.disclosure_col or "",
+            "aliases": ", ".join(d.aliases),
+            "paginated": d.paginated,
         }
         for name, d in catalog.items()
     ]

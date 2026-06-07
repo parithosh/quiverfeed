@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import warnings
 
+import pandas as pd
 import pytest
 import requests
 
@@ -59,6 +60,56 @@ def congress_row():
     }
 
 
+def donor_row():
+    return {
+        "TransactionDate": "2024-02-01",
+        "Uploaded": "2024-02-08T13:45:00Z",
+        "Ticker": "MSFT",
+        "Amount": 2500,
+    }
+
+
+def trump_trade_row():
+    return {
+        "Filed": "2024-03-11",
+        "Traded": "2024-03-01",
+        "Ticker": "DJT",
+    }
+
+
+def gov_contract_row():
+    return {
+        "Date": "2024-04-15",
+        "action_date": "2024-04-10",
+        "Ticker": "MSFT",
+        "Amount": 1000000,
+    }
+
+
+def lobbying_row():
+    return {
+        "Date": "2024-05-01",
+        "Ticker": "NVDA",
+        "Amount": 50000,
+    }
+
+
+def off_exchange_row():
+    return {
+        "Date": "2024-06-01",
+        "Ticker": "AAPL",
+        "Volume": 123456,
+    }
+
+
+def insiders_row():
+    return {
+        "Date": "2024-01-03",
+        "fileDate": "2024-01-10",
+        "Ticker": "NVDA",
+    }
+
+
 def client(tmp_path, responses, **kwargs):
     return quiverfeed.Client(
         token="token",
@@ -79,7 +130,7 @@ def test_fetch_adds_canonical_dates_and_uses_cache(tmp_path):
     assert "available_at" in df.columns
     assert df.loc[0, "event_time"].isoformat() == "2024-01-03T00:00:00+00:00"
     assert df.loc[0, "available_at"].isoformat() == "2024-01-10T00:00:00+00:00"
-    assert "version" not in c._session.calls[0]["params"]
+    assert c._session.calls[0]["params"]["version"] == "V2"
     assert c._session.calls[0]["params"]["page"] == 1
     assert c._session.calls[0]["params"]["page_size"] == 10
 
@@ -96,6 +147,43 @@ def test_unknown_dataset_raises(tmp_path):
         c.fetch("not-a-dataset")
 
 
+def test_fetch_accepts_bare_array_response(tmp_path):
+    c = client(tmp_path, [FakeResponse([off_exchange_row()])])
+
+    df = c.fetch("off_exchange_live", page_size=10)
+
+    assert len(df) == 1
+    assert "event_time" in df.columns
+    assert "available_at" not in df.columns
+
+
+def test_fetch_accepts_data_envelope_response(tmp_path):
+    c = client(tmp_path, [FakeResponse({"data": [congress_row()]})])
+
+    df = c.fetch("congresstrading", page_size=10)
+
+    assert len(df) == 1
+    assert "event_time" in df.columns
+    assert "available_at" in df.columns
+
+
+def test_fetch_paginates_until_short_page(tmp_path):
+    c = client(
+        tmp_path,
+        [
+            FakeResponse({"data": [congress_row()]}),
+            FakeResponse({"data": [congress_row()]}),
+            FakeResponse({"data": []}),
+        ],
+        request_pause_s=0.0,
+    )
+
+    df = c.fetch("congresstrading", page_size=1)
+
+    assert len(df) == 2
+    assert [call["params"]["page"] for call in c._session.calls] == [1, 2, 3]
+
+
 def test_known_ignored_param_warns_but_passes_through(tmp_path):
     c = client(tmp_path, [FakeResponse({"data": [congress_row()]})])
 
@@ -110,6 +198,45 @@ def test_page_and_page_size_params_are_reserved(tmp_path):
 
     with pytest.raises(ValueError, match="page and page_size"):
         c.fetch("congresstrading", page=2)
+
+
+def test_path_param_interpolation_removes_query_param_and_encodes(tmp_path):
+    c = client(tmp_path, [FakeResponse([gov_contract_row()])])
+
+    df = c.fetch("gov_contracts_historical", ticker="BRK/B", page_size=10)
+
+    assert len(df) == 1
+    call = c._session.calls[0]
+    assert call["url"].endswith("/beta/historical/govcontractsall/BRK%2FB")
+    assert "ticker" not in call["params"]
+    assert "page" not in call["params"]
+    assert "page_size" not in call["params"]
+
+
+def test_missing_path_param_raises(tmp_path):
+    c = client(tmp_path, [])
+
+    with pytest.raises(ValueError, match="Missing path parameter 'ticker'"):
+        c.fetch("gov_contracts_historical", page_size=10, force=True)
+
+
+def test_cache_key_includes_path_params(tmp_path):
+    c = client(
+        tmp_path,
+        [
+            FakeResponse([{**gov_contract_row(), "Ticker": "MSFT"}]),
+            FakeResponse([{**gov_contract_row(), "Ticker": "AAPL"}]),
+        ],
+    )
+
+    msft = c.fetch("gov_contracts_historical", ticker="MSFT", page_size=10)
+    aapl = c.fetch("gov_contracts_historical", ticker="AAPL", page_size=10)
+    cached_msft = c.fetch("gov_contracts_historical", ticker="MSFT", page_size=10)
+
+    assert msft.loc[0, "Ticker"] == "MSFT"
+    assert aapl.loc[0, "Ticker"] == "AAPL"
+    assert cached_msft.loc[0, "Ticker"] == "MSFT"
+    assert len(c._session.calls) == 2
 
 
 def test_max_pages_full_final_page_raises_when_requested(tmp_path):
@@ -357,6 +484,8 @@ def test_upstream_403_raises_plan_required(tmp_path):
         c.fetch("congresstrading", page_size=10, force=True)
 
     assert exc.value.dataset == "congresstrading"
+    assert exc.value.path == "/beta/bulk/congresstrading"
+    assert "/beta/bulk/congresstrading" in str(exc.value)
 
 
 def test_upstream_429_uses_retry_after(tmp_path):
@@ -369,6 +498,156 @@ def test_upstream_429_uses_retry_after(tmp_path):
         c.fetch("congresstrading", page_size=10, force=True)
 
     assert exc.value.retry_after_s == 123
+
+
+@pytest.mark.parametrize(
+    ("dataset", "payload", "event_iso", "available_iso", "params"),
+    [
+        (
+            "congresstrading",
+            {"data": [congress_row()]},
+            "2024-01-03T00:00:00+00:00",
+            "2024-01-10T00:00:00+00:00",
+            {},
+        ),
+        (
+            "corporate_donors",
+            {"data": [donor_row()]},
+            "2024-02-01T00:00:00+00:00",
+            "2024-02-08T13:45:00+00:00",
+            {},
+        ),
+        (
+            "trump_stock_trades",
+            {"data": [trump_trade_row()]},
+            "2024-03-01T00:00:00+00:00",
+            "2024-03-11T00:00:00+00:00",
+            {},
+        ),
+        (
+            "gov_contracts_all_live",
+            [gov_contract_row()],
+            "2024-04-10T00:00:00+00:00",
+            "2024-04-15T00:00:00+00:00",
+            {},
+        ),
+        (
+            "gov_contracts_historical",
+            [gov_contract_row()],
+            "2024-04-10T00:00:00+00:00",
+            "2024-04-15T00:00:00+00:00",
+            {"ticker": "MSFT"},
+        ),
+    ],
+)
+def test_pit_columns_added_for_disclosure_dated_datasets(
+    tmp_path,
+    dataset,
+    payload,
+    event_iso,
+    available_iso,
+    params,
+):
+    c = client(tmp_path, [FakeResponse(payload)])
+
+    df = c.fetch(dataset, page_size=10, **params)
+
+    assert df.loc[0, "event_time"].isoformat() == event_iso
+    assert df.loc[0, "available_at"].isoformat() == available_iso
+
+
+@pytest.mark.parametrize(
+    ("dataset", "payload", "event_iso", "params"),
+    [
+        ("lobbying_live", [lobbying_row()], "2024-05-01T00:00:00+00:00", {}),
+        (
+            "lobbying_historical",
+            [lobbying_row()],
+            "2024-05-01T00:00:00+00:00",
+            {"ticker": "NVDA"},
+        ),
+        (
+            "off_exchange_live",
+            [off_exchange_row()],
+            "2024-06-01T00:00:00+00:00",
+            {},
+        ),
+        (
+            "off_exchange_historical",
+            [off_exchange_row()],
+            "2024-06-01T00:00:00+00:00",
+            {"ticker": "AAPL"},
+        ),
+    ],
+)
+def test_event_only_datasets_do_not_fake_available_at(
+    tmp_path,
+    dataset,
+    payload,
+    event_iso,
+    params,
+):
+    c = client(tmp_path, [FakeResponse(payload)])
+
+    df = c.fetch(dataset, page_size=10, **params)
+
+    assert df.loc[0, "event_time"].isoformat() == event_iso
+    assert "available_at" not in df.columns
+
+
+def test_unparseable_canonical_dates_are_nat_without_touching_raw(tmp_path):
+    c = client(
+        tmp_path,
+        [
+            FakeResponse(
+                {
+                    "data": [
+                        {
+                            "TransactionDate": "not-a-date",
+                            "Uploaded": "also-not-a-date",
+                        },
+                        {
+                            "TransactionDate": "2024-02-01",
+                            "Uploaded": "2024-02-08T13:45:00Z",
+                        },
+                    ]
+                }
+            )
+        ],
+    )
+
+    df = c.fetch("corporate_donors", page_size=10)
+
+    assert df.loc[0, "TransactionDate"] == "not-a-date"
+    assert df.loc[0, "Uploaded"] == "also-not-a-date"
+    assert pd.isna(df.loc[0, "event_time"])
+    assert pd.isna(df.loc[0, "available_at"])
+    assert df.loc[1, "event_time"].isoformat() == "2024-02-01T00:00:00+00:00"
+    assert df.loc[1, "available_at"].isoformat() == "2024-02-08T13:45:00+00:00"
+
+
+def test_canary_profiles_selected_plan(tmp_path):
+    c = client(tmp_path, [FakeResponse({"data": [insiders_row()]})])
+
+    report = quiverfeed.canary(client=c, plan="tier2", page_size=5, max_pages=1)
+
+    assert list(report.columns) == [
+        "dataset",
+        "path",
+        "status",
+        "rows",
+        "columns",
+        "event_col",
+        "disclosure_col",
+        "has_event_time",
+        "has_available_at",
+        "error",
+    ]
+    assert report.loc[0, "dataset"] == "insiders"
+    assert report.loc[0, "status"] == "ok"
+    assert report.loc[0, "rows"] == 1
+    assert bool(report.loc[0, "has_event_time"]) is True
+    assert bool(report.loc[0, "has_available_at"]) is True
 
 
 def test_cache_hit_does_not_require_token(tmp_path):
