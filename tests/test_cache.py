@@ -66,6 +66,24 @@ def test_cache_expired_entry_returns_none(tmp_path):
     assert store.get("ds", {}, ttl=timedelta(hours=1)) is None
 
 
+def test_cache_get_stale_returns_expired_entry_with_metadata(tmp_path):
+    store = CacheStore(tmp_path)
+    df = pd.DataFrame([{"a": 1}])
+    store.set("ds", {}, df, "0.0.0", extra_metadata={"page_count": 3})
+
+    _, meta_path = store._paths("ds", {})
+    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+    metadata["fetched_at"] = (datetime.now(UTC) - timedelta(hours=10)).isoformat()
+    meta_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    assert store.get("ds", {}, ttl=timedelta(hours=1)) is None
+    entry = store.get_stale("ds", {})
+
+    assert entry is not None
+    assert entry.metadata["page_count"] == 3
+    pd.testing.assert_frame_equal(entry.df, df)
+
+
 def test_cache_get_handles_corrupt_metadata(tmp_path):
     store = CacheStore(tmp_path)
     df = pd.DataFrame([{"a": 1}])

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 
 class QuiverFeedError(Exception):
     """Base exception for quiverfeed-specific failures."""
@@ -29,10 +31,34 @@ class PlanRequiredError(QuiverFeedError):
 
 
 class RateLimitError(QuiverFeedError):
-    def __init__(self, retry_after_s: float):
-        self.retry_after_s = float(retry_after_s)
+    def __init__(
+        self,
+        retry_after_s: float | None = None,
+        *,
+        retry_after_seconds: float | None = None,
+        reset_at: datetime | None = None,
+        dataset: str | None = None,
+        path: str | None = None,
+    ):
+        if retry_after_seconds is None:
+            retry_after_seconds = 3600.0 if retry_after_s is None else retry_after_s
+        self.retry_after_seconds = float(retry_after_seconds)
+        # Backward-compatible alias kept for callers that already caught this.
+        self.retry_after_s = self.retry_after_seconds
+        if reset_at is None:
+            reset_at = datetime.now(UTC) + timedelta(seconds=self.retry_after_seconds)
+        self.reset_at = reset_at
+        self.dataset = dataset
+        self.path = path
+
+        target = ""
+        if dataset:
+            target = f" for dataset {dataset!r}"
+        if path:
+            target += f" path={path!r}"
         super().__init__(
-            f"Rate limit reached; retry after {self.retry_after_s:.0f} seconds."
+            "Rate limit reached"
+            f"{target}; retry after {self.retry_after_seconds:.0f} seconds."
         )
 
 
@@ -78,6 +104,10 @@ class ResponseShapeError(QuiverFeedError):
 
 class ParamIgnoredWarning(UserWarning):
     """Warns when a caller passes a known ignored upstream parameter."""
+
+
+class ParamStrippedWarning(UserWarning):
+    """Warns when quiverfeed removes a known-unsafe upstream parameter."""
 
 
 class CatalogDriftWarning(UserWarning):

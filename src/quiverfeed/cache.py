@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
@@ -22,6 +23,16 @@ def schema_hash(columns: list[str]) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class CacheEntry:
+    df: pd.DataFrame
+    metadata: Mapping[str, Any]
+    fetched_at: datetime
+
+    def is_expired(self, ttl: timedelta) -> bool:
+        return datetime.now(UTC) - self.fetched_at > ttl
+
+
 class CacheStore:
     def __init__(self, cache_dir: Path | str | None):
         self.cache_dir = Path(cache_dir) if cache_dir is not None else default_cache_dir()
@@ -32,6 +43,17 @@ class CacheStore:
         params: Mapping[str, Any],
         ttl: timedelta,
     ) -> pd.DataFrame | None:
+        entry = self.get_entry(dataset, params, ttl=ttl)
+        if entry is None:
+            return None
+        return entry.df
+
+    def get_entry(
+        self,
+        dataset: str,
+        params: Mapping[str, Any],
+        ttl: timedelta | None = None,
+    ) -> CacheEntry | None:
         parquet_path, meta_path = self._paths(dataset, params)
         if not parquet_path.exists() or not meta_path.exists():
             return None
@@ -41,15 +63,22 @@ class CacheStore:
             fetched_at = datetime.fromisoformat(metadata["fetched_at"])
             if fetched_at.tzinfo is None:
                 fetched_at = fetched_at.replace(tzinfo=UTC)
-            if datetime.now(UTC) - fetched_at > ttl:
+            if ttl is not None and datetime.now(UTC) - fetched_at > ttl:
                 return None
 
             df = pd.read_parquet(parquet_path)
             if metadata.get("schema_hash") != schema_hash(list(df.columns)):
                 return None
-            return df
+            return CacheEntry(df=df, metadata=metadata, fetched_at=fetched_at)
         except (OSError, KeyError, ValueError, json.JSONDecodeError):
             return None
+
+    def get_stale(
+        self,
+        dataset: str,
+        params: Mapping[str, Any],
+    ) -> CacheEntry | None:
+        return self.get_entry(dataset, params, ttl=None)
 
     def set(
         self,
@@ -57,6 +86,7 @@ class CacheStore:
         params: Mapping[str, Any],
         df: pd.DataFrame,
         version: str,
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         parquet_path, meta_path = self._paths(dataset, params)
         parquet_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +102,8 @@ class CacheStore:
             "quiverfeed_version": version,
             "schema_hash": schema_hash(list(df.columns)),
         }
+        if extra_metadata:
+            metadata.update({str(k): _normalize(v) for k, v in extra_metadata.items()})
         tmp_meta.write_text(
             json.dumps(metadata, indent=2, sort_keys=True),
             encoding="utf-8",

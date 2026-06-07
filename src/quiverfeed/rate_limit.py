@@ -39,7 +39,7 @@ class TokenBucket:
         self.bucket_file = Path(bucket_file) if bucket_file is not None else None
         self._timestamps: list[float] = []
 
-    def acquire(self) -> None:
+    def acquire(self, *, dataset: str | None = None, path: str | None = None) -> None:
         if self.policy == "off":
             return
 
@@ -48,7 +48,11 @@ class TokenBucket:
             if retry_after is None:
                 return
             if self.policy == "raise":
-                raise RateLimitError(retry_after)
+                raise RateLimitError(
+                    retry_after,
+                    dataset=dataset,
+                    path=path,
+                )
             time.sleep(retry_after)
 
     def state(self) -> RateLimitState:

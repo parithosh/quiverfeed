@@ -8,6 +8,7 @@ from quiverfeed.catalog import (
     all_datasets,
     get_dataset,
     normalize_dataset_name,
+    resolve_dataset_name,
     register_dataset,
     unregister_dataset,
 )
@@ -177,6 +178,16 @@ def test_new_dataset_aliases_resolve_to_canonical_entries():
 
     for alias, canonical in aliases.items():
         assert get_dataset(alias) is DATASETS[canonical]
+        assert resolve_dataset_name(alias) == canonical
+
+
+def test_lobbying_live_records_param_safety_rules():
+    dataset = DATASETS["lobbying_live"]
+
+    assert "date_from" in dataset.stripped_params
+    assert "date_to" in dataset.stripped_params
+    assert "all" in dataset.stripped_params
+    assert dataset.max_page_size == 5000
 
 
 def test_register_dataset_extends_catalog():
