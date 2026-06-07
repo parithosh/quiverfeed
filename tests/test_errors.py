@@ -26,10 +26,17 @@ def test_all_errors_subclass_quiverfeed_error():
 
 
 def test_plan_required_error_includes_hint():
-    err = PlanRequiredError("congresstrading", "Upgrade required", hint_plan="hobbyist")
+    err = PlanRequiredError(
+        "congresstrading",
+        "Upgrade required",
+        hint_plan="hobbyist",
+        path="/beta/bulk/congresstrading",
+    )
     assert err.dataset == "congresstrading"
     assert err.hint_plan == "hobbyist"
+    assert err.path == "/beta/bulk/congresstrading"
     assert "hobbyist" in str(err)
+    assert "/beta/bulk/congresstrading" in str(err)
 
 
 def test_plan_required_error_without_hint():

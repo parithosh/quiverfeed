@@ -10,12 +10,22 @@ class AuthError(QuiverFeedError):
 
 
 class PlanRequiredError(QuiverFeedError):
-    def __init__(self, dataset: str, message: str, hint_plan: str | None = None):
+    def __init__(
+        self,
+        dataset: str,
+        message: str,
+        hint_plan: str | None = None,
+        path: str | None = None,
+    ):
         self.dataset = dataset
         self.message = message
         self.hint_plan = hint_plan
+        self.path = path
         hint = f" Hint plan: {hint_plan}." if hint_plan else ""
-        super().__init__(f"Plan required for dataset {dataset!r}: {message}.{hint}")
+        path_detail = f" path={path!r}" if path else ""
+        super().__init__(
+            f"Plan required for dataset {dataset!r}{path_detail}: {message}.{hint}"
+        )
 
 
 class RateLimitError(QuiverFeedError):

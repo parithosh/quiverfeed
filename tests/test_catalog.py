@@ -40,6 +40,7 @@ def test_get_dataset_exact_and_forgiving():
 
     forgiving = get_dataset("Congress-Trading")
     assert forgiving is direct
+    assert get_dataset("congress_trades") is direct
 
 
 def test_get_dataset_unknown_returns_none():
@@ -70,6 +71,112 @@ def test_known_datasets_have_required_attributes():
         # but the catalog must still describe an event column where one exists.
         if dataset.disclosure_col is not None:
             assert dataset.event_col is not None
+
+
+def test_catalog_contains_current_hobbyist_public_surface():
+    expected = {
+        "congresstrading": (
+            "/beta/bulk/congresstrading",
+            "hobbyist",
+            "Traded",
+            "Filed",
+        ),
+        "politicians": (
+            "/beta/bulk/congress/politicians",
+            "hobbyist",
+            None,
+            None,
+        ),
+        "corporate_donors": (
+            "/beta/bulk/corporatedonors",
+            "hobbyist",
+            "TransactionDate",
+            "Uploaded",
+        ),
+        "trump_stock_trades": (
+            "/beta/bulk/trumpstocktrades",
+            "hobbyist",
+            "Traded",
+            "Filed",
+        ),
+        "gov_contracts_live": (
+            "/beta/live/govcontracts",
+            "hobbyist",
+            None,
+            None,
+        ),
+        "gov_contracts_all_live": (
+            "/beta/live/govcontractsall",
+            "hobbyist",
+            "action_date",
+            "Date",
+        ),
+        "gov_contracts_historical": (
+            "/beta/historical/govcontractsall/{ticker}",
+            "hobbyist",
+            "action_date",
+            "Date",
+        ),
+        "lobbying_live": (
+            "/beta/live/lobbying",
+            "hobbyist",
+            "Date",
+            None,
+        ),
+        "lobbying_historical": (
+            "/beta/historical/lobbying/{ticker}",
+            "hobbyist",
+            "Date",
+            None,
+        ),
+        "off_exchange_live": (
+            "/beta/live/offexchange",
+            "hobbyist",
+            "Date",
+            None,
+        ),
+        "off_exchange_historical": (
+            "/beta/historical/offexchange/{ticker}",
+            "hobbyist",
+            "Date",
+            None,
+        ),
+    }
+
+    for name, (path, plan, event_col, disclosure_col) in expected.items():
+        dataset = DATASETS[name]
+        assert dataset.path == path
+        assert dataset.plan == plan
+        assert dataset.event_col == event_col
+        assert dataset.disclosure_col == disclosure_col
+
+
+def test_catalog_corrections_for_non_hobbyist_datasets():
+    assert DATASETS["insiders"].plan == "tier2"
+    assert DATASETS["bill_summaries"].path == "/beta/live/bill_summaries"
+    assert DATASETS["bill_summaries"].plan == "tier1_enterprise"
+
+
+def test_new_dataset_aliases_resolve_to_canonical_entries():
+    aliases = {
+        "corporatedonors": "corporate_donors",
+        "donors": "corporate_donors",
+        "trumpstocktrades": "trump_stock_trades",
+        "govcontracts_live": "gov_contracts_live",
+        "govcontractsall_live": "gov_contracts_all_live",
+        "govcontracts": "gov_contracts_historical",
+        "government_contracts": "gov_contracts_historical",
+        "lobbying": "lobbying_live",
+        "corporate_lobbying": "lobbying_live",
+        "lobbying_by_ticker": "lobbying_historical",
+        "offexchange_live": "off_exchange_live",
+        "offexchange": "off_exchange_historical",
+        "dark_pool": "off_exchange_historical",
+        "congress_politicians": "politicians",
+    }
+
+    for alias, canonical in aliases.items():
+        assert get_dataset(alias) is DATASETS[canonical]
 
 
 def test_register_dataset_extends_catalog():
